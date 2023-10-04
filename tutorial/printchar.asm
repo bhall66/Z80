@@ -23,7 +23,7 @@
 
 .ORG $0100
 
-    LD   A, '%'        ; display an ampersand
+    LD   A, '~'        ; display a tilde
     CALL printCh       ; do it
     RET                ; and return
 
