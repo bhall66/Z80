@@ -6,7 +6,7 @@
 ;      SW:   TASM compiler, RomWBW firmware
 ;
 ;  This is my first assembler program for Z80 on the RC2014 Zed.
-;  What does it do?  It writes a single '@' character to the terminal console.
+;  What does it do?  It writes a single '~' character to the terminal console.
 ;
 ;  Compile it with tasm as follows:
 ;  "tasm -80 onechar.asm"
