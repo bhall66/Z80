@@ -1,0 +1,20 @@
+20 REM
+30 REM   LCDTEXT.BAS
+40 REM   by Bruce E. Hall, 25 Aug 2026
+50 REM
+60 REM   Accept text from console
+70 REM   and display it on the LCD.
+80 REM
+100 INPUT "Text to display";A$
+200 OUT 218,1
+210 L=LEN(A$)
+215 IF L=0 THEN END
+220 FOR I=1 TO L
+230 C$=MID$(A$,I,1)
+240 OUT 219,ASC(C$)
+250 NEXT I
+260 GOTO 100
+8,1
+210 L=LEN(A$)
+215 IF L=0 THEN END
+220 FOR I=1 TO 

@@ -1,0 +1,80 @@
+0001   0000             ;
+0002   0000             ;   Title:   LCDFILL.asm
+0003   0000             ;  Author:   Bruce E. Hall, w8bh
+0004   0000             ;    Date:   27 Aug 2026
+0005   0000             ;      HW:   RC2014Zed with 512K RAM/ROM module
+0006   0000             ;      SW:   TASM compiler, RomWBW firmware
+0007   0000             ;
+0008   0000             ;  Get a single character from the command tail
+0009   0000             ;  and paint the entire front panel LCD with it.
+0010   0000             ;
+0011   0000             
+0012   0000             cmdPort	      .equ	  $DA	 ; port for HD44780 command register
+0013   0000             dataPort	  .equ	  $DB	 ; port for HD44780 data register 
+0014   0000             
+0015   0000             ; HD44780 Controller Commands 
+0016   0000             ;
+0017   0000             CLEAR_DISPLAY .equ    $01    ; clear screen command
+0018   0000             CURSOR_HOME   .equ    $02    ; home the cursor
+0019   0000             DISPLAY_OFF   .equ    $08    ; turn display off
+0020   0000             DISPLAY_ON    .equ    $0C    ; display on with no cursor
+0021   0000             CURSOR_ON     .equ    $0E    ; display on with underline cursor
+0022   0000             CURSOR_BLINK  .equ    $0F    ; display on with blinking block cursor
+0023   0000             CURSOR_LEFT   .equ    $10    ; move cursor left
+0024   0000             CURSOR_RIGHT  .equ    $14    ; move cursor right
+0025   0000             DISP_INIT4    .equ    $28    ; initialize display for 4-bit input
+0026   0000             DISP_INIT8    .equ    $38    ; initialize display for 8-bit input
+0027   0000             LOAD_SYMBOL   .equ    $40    ; set CG-RAM address
+0028   0000             SET_CURSOR    .equ    $80    ; set display RAM address
+0029   0000             
+0030   0000             
+0031   0100             .ORG $0100
+0032   0100             
+0033   0100             Start:   
+0034   0100 CD 20 01        CALL ClearScreen                    
+0035   0103 3A 82 00        LD   A,($0082)           ; get 1st char of command tail
+0036   0106 4F              LD   C,A                 ; save char in C        
+0037   0107 06 50           LD   B,80                ; count 80 characters
+0038   0109             j0:           
+0039   0109 79              LD   A,C                 ; retrieve char
+0040   010A CD 18 01        CALL SendChar            ; send it to display
+0041   010D 10 FA           DJNZ j0                  ; repeat until all sent
+0042   010F C9              RET
+0043   0110             
+0044   0110             
+0045   0110             
+0046   0110             ;=============================================================
+0047   0110             ;
+0048   0110             ;   LCD ROUTINES
+0049   0110             ;
+0050   0110             
+0051   0110             SendCommand:
+0052   0110 D3 DA           OUT (cmdPort),A          ; send the command
+0053   0112 DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0054   0114 07              RLCA                     ; move status bit to carry 
+0055   0115 38 FB           JR  C,$-3                ; wait until ready
+0056   0117 C9              RET
+0057   0118             
+0058   0118             SendChar:
+0059   0118 D3 DB           OUT (dataPort),A         ; send a character to LCD
+0060   011A DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0061   011C 07              RLCA                     ; move status bit to carry 
+0062   011D 38 FB           JR  C,$-3                ; wait until ready
+0063   011F C9              RET
+0064   0120             
+0065   0120             ClearScreen:
+0066   0120 3E 01           LD   A,CLEAR_DISPLAY
+0067   0122 CD 10 01        CALL SendCommand
+0068   0125 C9              RET 
+0069   0126             
+0070   0126             SendString:
+0071   0126 7E          	LD	A,(HL)			     ; next character to send
+0072   0127 B7          	OR	A			         ; set flags
+0073   0128 C8          	RET	Z			         ; done on null
+0074   0129 CD 18 01    	CALL SendChar            ; send the character
+0075   012C 23          	INC	HL			         ; point to next char
+0076   012D 18 F7       	JR	SendString    	     ; and loop until done
+0077   012F             
+0078   012F             .END
+0079   012F             
+tasm: Number of errors = 0

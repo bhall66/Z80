@@ -1,0 +1,372 @@
+0001   0000             ;
+0002   0000             ;   Title:   clock4.asm
+0003   0000             ;  Author:   Bruce E. Hall, w8bh
+0004   0000             ;    Date:   28 Aug 2026
+0005   0000             ;      HW:   RC2014Zed with 512K RAM/ROM module
+0006   0000             ;      SW:   TASM compiler, RomWBW firmware
+0007   0000             ;
+0008   0000             ;  Display a large, 4-digit clock on the front panel LCD
+0009   0000             ;
+0010   0000             
+0011   0000             cmdPort	      .equ	  $DA	 ; port for HD44780 command register
+0012   0000             dataPort	  .equ	  $DB	 ; port for HD44780 data register 
+0013   0000             
+0014   0000             ; HD44780 Controller Commands 
+0015   0000             ;
+0016   0000             CLEAR_DISPLAY .equ    $01    ; clear screen command
+0017   0000             LOAD_SYMBOL   .equ    $40    ; set CG-RAM address
+0018   0000             SET_CURSOR    .equ    $80    ; set display RAM address
+0019   0000             
+0020   0000             
+0021   0100             .ORG $0100
+0022   0100             
+0023   0100             Start:
+0024   0100 CD 18 02        CALL ClearScreen
+0025   0103 CD 21 01        CALL LoadIcons           
+0026   0106             j0:
+0027   0106 CD 15 01        CALL ExitOnKeypress
+0028   0109 CD 33 01        CALL DisplayTimeHM       
+0029   010C CD DC 01        CALL WaitOneSecond
+0030   010F CD 48 01        CALL AdvanceTime
+0031   0112 C3 06 01        JP   j0 
+0032   0115             
+0033   0115             ExitOnKeypress:
+0034   0115 0E 80           LD   C,$80               ; for current console.
+0035   0117 06 02           LD   B,$02               ; check char input buffer
+0036   0119 CF              RST  08                  ; call the HBIOS routine
+0037   011A C8              RET  Z                   ; nothing waiting, so return
+0038   011B CD 18 02        CALL ClearScreen         ; erase clock display
+0039   011E C3 00 00        JP  0                    ; & return to CP/M
+0040   0121             
+0041   0121             LoadIcons:
+0042   0121 3E 40           LD   A,LOAD_SYMBOL     
+0043   0123 CD 08 02        CALL SendCommand         ; send "set CGRAM address=0" cmd
+0044   0126 21 57 02        LD   HL,BD_ICONS         ; point to icons to be loaded
+0045   0129 06 40           LD   B,64                ; sending 64 bytes = 8 icons
+0046   012B             li0:
+0047   012B 7E              LD   A,(HL)              ; get icon data byte
+0048   012C CD 10 02        Call SendChar            ; send it
+0049   012F 23              INC  HL                  ; point to next byte
+0050   0130 10 F9           DJNZ li0                 ; loop until all sent
+0051   0132 C9              RET 
+0052   0133             
+0053   0133             
+0054   0133             ;=============================================================
+0055   0133             ;
+0056   0133             ;   CLOCK ROUTINES
+0057   0133             ;
+0058   0133             
+0059   0133             DisplayTimeHM:
+0060   0133 0E 00           LD   C,0
+0061   0135 3A 23 03        LD   A,(hours)
+0062   0138 CD 8E 01        CALL ShowTwoDigits
+0063   013B CD 76 01        CALL ShowColon
+0064   013E 3A 22 03        LD   A,(minutes)
+0065   0141 CD 8E 01        CALL ShowTwoDigits
+0066   0144 CD BE 01        CALL DisplaySeconds
+0067   0147 C9              RET 
+0068   0148             
+0069   0148             AdvanceTime:
+0070   0148 3A 21 03        LD   A,(seconds)
+0071   014B 3C              INC  A                   ; advance seconds
+0072   014C FE 3C           CP   60                  ; 60 seconds yet?
+0073   014E 32 21 03        LD   (seconds),A
+0074   0151 C0              RET  NZ 
+0075   0152 3E 00           LD   A,0                 ; start new minute
+0076   0154 32 21 03        LD   (seconds),A 
+0077   0157 3A 22 03        LD   A,(minutes)    
+0078   015A 3C              INC  A                   ; advance minutes
+0079   015B FE 3C           CP   60                  ; 60 minutes yet?
+0080   015D 32 22 03        LD  (minutes),A 
+0081   0160 C0              RET NZ
+0082   0161 3E 00           LD  A,0                  ; start new hour
+0083   0163 32 22 03        LD  (minutes),A          
+0084   0166 3A 23 03        LD  A,(hours)
+0085   0169 3C              INC A                    ; advance hour
+0086   016A 32 23 03        LD  (hours),A 
+0087   016D FE 0D           CP  13                   ; 13th hour yet?
+0088   016F C0              RET NZ 
+0089   0170 3E 01           LD  A,1             
+0090   0172 32 23 03        LD  (hours),A            ; reset to 01:00
+0091   0175 C9              RET 
+0092   0176             
+0093   0176             ; uncomment the first 4 instructions to enable colon flash
+0094   0176             ;
+0095   0176             ShowColon:
+0096   0176                 ;LD   A,(seconds)
+0097   0176                 ;RR   A                   ; rotate bit0 into carry
+0098   0176                 ;LD   D,6                 ; open colons on odd seconds           
+0099   0176                 ;JR   C,sc1               ; carry = odd second
+0100   0176 16 07           LD   D,7                 ; closed colons (icon#7) on even seconds
+0101   0178             sc1:
+0102   0178 3E 01           LD   A,1
+0103   017A 41              LD   B,C
+0104   017B CD 27 02        CALL GotoRC              ; position top colon
+0105   017E 7A              LD   A,D                 ; get colon char
+0106   017F CD 10 02        CALL SendChar            ; and display it
+0107   0182 3E 02           LD   A,2
+0108   0184 41              LD   B,C
+0109   0185 CD 27 02        CALL GotoRC              ; position bottom colon
+0110   0188 7A              LD   A,D                 ; get colon char
+0111   0189 CD 10 02        CALL SendChar            ; and display it
+0112   018C 0C              INC  C                   ; update cursor
+0113   018D C9              RET 
+0114   018E             
+0115   018E             
+0116   018E             ; call with A=a two digit number, C=left margin
+0117   018E             ; displays the number as two large digits
+0118   018E             
+0119   018E             ShowTwoDigits:
+0120   018E C5              PUSH BC 
+0121   018F CD A8 01        CALL TwoDigit             ; break into tens/ones
+0122   0192 C1              POP  BC                   ; restore margin
+0123   0193 3A 1F 03        LD   A,(tens)             ; get tens digit
+0124   0196 CD E5 01        CALL ShowBigDigit         ; and display it
+0125   0199 79              LD   A,C                  ; get cursor
+0126   019A C6 04           ADD  A,4                  ; move over 4 spaces
+0127   019C 4F              LD   C,A                  ; update cursor
+0128   019D 3A 20 03        LD   A,(ones)             ; get ones digit
+0129   01A0 CD E5 01        CALL ShowBigDigit         ; and display it
+0130   01A3 79              LD   A,C                  ; get cursor
+0131   01A4 C6 04           ADD  A,4                  ; advance 4 spaces
+0132   01A6 4F              LD   C,A                  ; update cursor   
+0133   01A7 C9              RET 
+0134   01A8             
+0135   01A8             ; Call with A = a two-digit number
+0136   01A8             ; Returns with tens-digit in (tens) and ones-digit in (ones)
+0137   01A8             ; Uses HL and C
+0138   01A8             TwoDigit:
+0139   01A8 0E 0A           LD   C,10
+0140   01AA 21 20 03        LD   HL,ones
+0141   01AD 36 00           LD   (HL),0
+0142   01AF 21 1F 03        LD   HL,tens
+0143   01B2 36 00           LD   (HL),0
+0144   01B4             j06:
+0145   01B4 34              INC  (HL) 
+0146   01B5 91              SUB  C 
+0147   01B6 30 FC           JR   NC,j06
+0148   01B8 35              DEC  (HL)
+0149   01B9 81              ADD  A,C 
+0150   01BA 32 20 03        LD   (ones),A
+0151   01BD C9              RET   
+0152   01BE             
+0153   01BE             DisplaySeconds:
+0154   01BE 3E 00           LD   A,0
+0155   01C0 06 12           LD   B,18
+0156   01C2 CD 27 02        CALL GotoRC               ; position seconds
+0157   01C5 3A 21 03        LD   A,(seconds)          ; get seconds
+0158   01C8 CD A8 01        CALL TwoDigit             ; split into 2 digits
+0159   01CB 3A 1F 03        LD   A,(tens)             ; get tens digit
+0160   01CE C6 30           ADD  A,'0'                ; convert it to ASCII
+0161   01D0 CD 10 02        CALL SendChar             ; and display it
+0162   01D3 3A 20 03        LD   A,(ones)             ; get the ones digit
+0163   01D6 C6 30           ADD  A,'0'                ; conver it to ASCII
+0164   01D8 CD 10 02        CALL SendChar             ; and display it
+0165   01DB C9              RET 
+0166   01DC             
+0167   01DC             WaitOneSecond:
+0168   01DC C5              PUSH BC 
+0169   01DD 01 E8 03        LD   BC,1000              ; wait 1 second
+0170   01E0 CD 4B 02        CALL DELAY_BC
+0171   01E3 C1              POP  BC 
+0172   01E4 C9              RET 
+0173   01E5             
+0174   01E5             ; call with A=digit value and C=column offset
+0175   01E5             ;
+0176   01E5             ShowBigDigit:
+0177   01E5 1E 0C           LD   E,12                ; DE = size of each digit defn
+0178   01E7 16 00           LD   D,0                        
+0179   01E9 21 97 02        LD   HL,BIGDIGITS        ; point to digit definitions
+0180   01EC B7              OR   A                   ; is A=0?
+0181   01ED 28 04           JR   Z,sbd2              ; for digit zero, we are done
+0182   01EF 47              LD   B,A                 ; set up digit counter in B 
+0183   01F0             sbd1:
+0184   01F0 19              ADD  HL,DE               ; point to next digit defn
+0185   01F1 10 FD           DJNZ sbd1                ; until desired digit reached
+0186   01F3             sbd2:                        ; now HL = HL + (12*digit)
+0187   01F3 11 0F 03        LD   DE,digitXY          ; point to icon location array
+0188   01F6 06 0C           LD   B,12                ; each digit is 3x4=12 icons big
+0189   01F8             sbd3:
+0190   01F8 1A              LD   A,(DE)              ; get icon position
+0191   01F9 81              ADD  A,C                 ; add in column offset
+0192   01FA C6 80           ADD  A,SET_CURSOR        ; make it a command
+0193   01FC CD 08 02        CALL SendCommand         ; set icon position
+0194   01FF 7E              LD   A,(HL)              ; get icon to display
+0195   0200 CD 10 02        CALL SendChar            ; display it
+0196   0203 13              INC  DE                  ; goto next position
+0197   0204 23              INC  HL                  ; goto next icon
+0198   0205 10 F1           DJNZ sbd3                ; loop for all 12 positions
+0199   0207 C9              RET 
+0200   0208             
+0201   0208             
+0202   0208             ;=============================================================
+0203   0208             ;
+0204   0208             ;   LCD ROUTINES
+0205   0208             ;
+0206   0208             
+0207   0208             SendCommand:
+0208   0208 D3 DA           OUT (cmdPort),A          ; send the command
+0209   020A DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0210   020C 07              RLCA                     ; move status bit to carry 
+0211   020D 38 FB           JR  C,$-3                ; wait until ready
+0212   020F C9              RET
+0213   0210             
+0214   0210             SendChar:
+0215   0210 D3 DB           OUT (dataPort),A         ; send a character to LCD
+0216   0212 DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0217   0214 07              RLCA                     ; move status bit to carry 
+0218   0215 38 FB           JR  C,$-3                ; wait until ready
+0219   0217 C9              RET
+0220   0218             
+0221   0218             ClearScreen:
+0222   0218 3E 01           LD   A,CLEAR_DISPLAY
+0223   021A CD 08 02        CALL SendCommand
+0224   021D C9              RET 
+0225   021E             
+0226   021E             SendString:
+0227   021E 7E          	LD	A,(HL)			     ; next character to send
+0228   021F B7          	OR	A			         ; set flags
+0229   0220 C8          	RET	Z			         ; done on null
+0230   0221 CD 10 02    	CALL SendChar            ; send the character
+0231   0224 23          	INC	HL			         ; point to next char
+0232   0225 18 F7       	JR	SendString    	     ; and loop until done
+0233   0227             
+0234   0227             ; MOVE LCD CURSOR TO A=ROW(0-3), B=COLUMN(0-19)
+0235   0227             ;
+0236   0227             GotoRC:
+0237   0227 F5              PUSH AF
+0238   0228 D5              PUSH DE 
+0239   0229 E5              PUSH HL 
+0240   022A 21 1B 03        LD   HL,LINEDAT          ; point to line offset table
+0241   022D 5F              LD   E,A               
+0242   022E 16 00           LD   D,0                 ; DE = row
+0243   0230 19              ADD  HL,DE               ; point to desired line offset
+0244   0231 7E              LD   A,(HL)              ; A now = addr of line start
+0245   0232 80              ADD  A,B                 ; add in column
+0246   0233 F6 80           OR   SET_CURSOR          ; add "set DDRAM address"  
+0247   0235 CD 08 02        CALL SendCommand         ; send the command
+0248   0238 E1              POP  HL 
+0249   0239 D1              POP  DE
+0250   023A F1              POP  AF
+0251   023B C9              RET
+0252   023C             
+0253   023C             
+0254   023C             ;=============================================================
+0255   023C             ;
+0256   023C             ;   DELAY ROUTINES
+0257   023C             ;
+0258   023C             
+0259   023C             ; DELAY_INNER:
+0260   023C             ; This is a helper routine for DELAY_BC.
+0261   023C             ;
+0262   023C             ; The desired length = 7348T, slightly shorter than 1mS
+0263   023C             ; The call itself takes 17T, leaving 7331T in the routine.
+0264   023C             ; Saving/restoring registers,loading BC and returning takes 41T,
+0265   023C             ; leaving 7290T for the delay loop.  This is done with
+0266   023C             ; 303 loops of 24T, plus 18T padding at the end.
+0267   023C             ; 
+0268   023C             DELAY_INNER:
+0269   023C C5              PUSH BC                 ; 11T
+0270   023D 01 2F 01        LD  BC,303              ; 10T
+0271   0240             J03:                        ; Loop = 24*bc = 7272T
+0272   0240 0B              DEC BC                  ; 6T
+0273   0241 78              LD  A,B                 ; 4T
+0274   0242 B1              OR  C                   ; 4T
+0275   0243 C2 40 02        JP  NZ,J03              ; 10T 
+0276   0246 03              INC BC                  ; add +18T padding
+0277   0247 03              INC BC
+0278   0248 03              INC BC
+0279   0249 C1              POP BC                  ; 10T
+0280   024A C9              RET                     ; 10T
+0281   024B             
+0282   024B             ; DELAY_BC is called with BC= desired delay in milliseconds
+0283   024B             ; when finished, BC=0.
+0284   024B             ;
+0285   024B             ; Actual Time Delay, in T-states:
+0286   024B             ; loading BC & calling DELAY_BC:  27T
+0287   024B             ; DELAY_BC itself:  7372*BC + 31T
+0288   024B             ; TOTAL = 7372*BC + 58
+0289   024B             ; For example, 1 second: 7372*1000 + 58 = 7,372,058T (999.9mS)
+0290   024B             ; 
+0291   024B             DELAY_BC:
+0292   024B F5              PUSH AF                 ; 11T
+0293   024C             J04:                        ; bc * 7372T
+0294   024C CD 3C 02        CALL DELAY_INNER        ; 7348T
+0295   024F 0B              DEC BC                  ; 6T
+0296   0250 78              LD  A,B                 ; 4T
+0297   0251 B1              OR  C                   ; 4T
+0298   0252 C2 4C 02        JP  NZ,J04              ; 10T 
+0299   0255 F1              POP AF                  ; 10T
+0300   0256 C9              RET                     ; 10T 
+0301   0257             
+0302   0257             
+0303   0257             ;=============================================================
+0304   0257             ;
+0305   0257             ;   PROGRAM CONSTANTS
+0306   0257             ;
+0307   0257             
+0308   0257 01 03 03 07 BD_ICONS  .DB $01,$03,$03,$07,$07,$0F,$0F,$1F  ; lower-rt triangle 
+0308   025B 07 0F 0F 1F 
+0309   025F 10 18 18 1C           .DB $10,$18,$18,$1C,$1C,$1E,$1E,$1F  ; lower-lf triangle 
+0309   0263 1C 1E 1E 1F 
+0310   0267 1F 0F 0F 07           .DB $1F,$0F,$0F,$07,$07,$03,$03,$01  ; upper-rt triangle 
+0310   026B 07 03 03 01 
+0311   026F 1F 1E 1E 1C           .DB $1F,$1E,$1E,$1C,$1C,$18,$18,$10  ; upper-lf triangle 
+0311   0273 1C 18 18 10 
+0312   0277 00 00 00 00           .DB $00,$00,$00,$00,$1F,$1F,$1F,$1F  ; lower horiz bar 
+0312   027B 1F 1F 1F 1F 
+0313   027F 1F 1F 1F 1F           .DB $1F,$1F,$1F,$1F,$00,$00,$00,$00  ; upper horiz bar 
+0313   0283 00 00 00 00 
+0314   0287 00 0E 11 11           .DB $00,$0e,$11,$11,$11,$0e,$00,$00  ; open dot 
+0314   028B 11 0E 00 00 
+0315   028F 00 0E 1F 1F           .DB $00,$0E,$1f,$1f,$1f,$0e,$00,$00  ; closed dot 
+0315   0293 1F 0E 00 00 
+0316   0297             
+0317   0297 00 FF 01 FF BIGDIGITS .DB $00,$FF,$01,$FF,$20,$FF,$FF,$20,$FF,$02,$FF,$03   ; #0 
+0317   029B 20 FF FF 20 
+0317   029F FF 02 FF 03 
+0318   02A3 00 FF 20 20           .DB $00,$FF,$20,$20,$FF,$20,$20,$FF,$20,$20,$FF,$20   ; #1 
+0318   02A7 FF 20 20 FF 
+0318   02AB 20 20 FF 20 
+0319   02AF 00 FF 01 20           .DB $00,$FF,$01,$20,$00,$03,$00,$03,$20,$FF,$FF,$FF   ; #2 
+0319   02B3 00 03 00 03 
+0319   02B7 20 FF FF FF 
+0320   02BB 00 FF 01 20           .DB $00,$FF,$01,$20,$20,$FF,$20,$05,$FF,$02,$FF,$03   ; #3 
+0320   02BF 20 FF 20 05 
+0320   02C3 FF 02 FF 03 
+0321   02C7 FF 20 FF FF           .DB $FF,$20,$FF,$FF,$FF,$FF,$20,$20,$FF,$20,$20,$FF   ; #4 
+0321   02CB FF FF 20 20 
+0321   02CF FF 20 20 FF 
+0322   02D3 FF FF FF FF           .DB $FF,$FF,$FF,$FF,$04,$04,$20,$20,$FF,$FF,$FF,$03   ; #5 
+0322   02D7 04 04 20 20 
+0322   02DB FF FF FF 03 
+0323   02DF 00 FF 01 FF           .DB $00,$FF,$01,$FF,$20,$20,$FF,$05,$01,$02,$FF,$03   ; #6 
+0323   02E3 20 20 FF 05 
+0323   02E7 01 02 FF 03 
+0324   02EB FF FF FF 20           .DB $FF,$FF,$FF,$20,$20,$FF,$20,$20,$FF,$20,$20,$FF   ; #7 
+0324   02EF 20 FF 20 20 
+0324   02F3 FF 20 20 FF 
+0325   02F7 00 FF 01 FF           .DB $00,$FF,$01,$FF,$20,$FF,$FF,$05,$FF,$02,$FF,$03   ; #8 
+0325   02FB 20 FF FF 05 
+0325   02FF FF 02 FF 03 
+0326   0303 00 FF 01 02           .DB $00,$FF,$01,$02,$04,$FF,$20,$20,$FF,$20,$20,$FF   ; #9 
+0326   0307 04 FF 20 20 
+0326   030B FF 20 20 FF 
+0327   030F             
+0328   030F 00 01 02 40 digitXY   .DB $00,$01,$02,$40,$41,$42,$14,$15,$16,$54,$55,$56
+0328   0313 41 42 14 15 
+0328   0317 16 54 55 56 
+0329   031B 00 40 14 54 LINEDAT   .DB $00,$40,$14,$54
+0330   031F             
+0331   031F             ;=============================================================
+0332   031F             ;
+0333   031F             ;   PROGRAM VARIABLES
+0334   031F             ;
+0335   031F             
+0336   031F 00          tens      .DB 0
+0337   0320 00          ones      .DB 0
+0338   0321 00          seconds   .DB 0
+0339   0322 20          minutes   .DB 32
+0340   0323 0A          hours     .DB 10
+0341   0324             
+0342   0324             .ENDtasm: Number of errors = 0

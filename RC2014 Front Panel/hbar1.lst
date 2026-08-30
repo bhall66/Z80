@@ -1,0 +1,263 @@
+0001   0000             ;
+0002   0000             ;   Title:   hbar1.asm
+0003   0000             ;  Author:   Bruce E. Hall, w8bh
+0004   0000             ;    Date:   28 Aug 2026
+0005   0000             ;      HW:   RC2014Zed with 512K RAM/ROM module
+0006   0000             ;      SW:   TASM compiler, RomWBW firmware
+0007   0000             ;
+0008   0000             ;  Draw an animated horizontal bar on the front panel LCD
+0009   0000             ;  Press any key to stop the demo.
+0010   0000             ;
+0011   0000             
+0012   0000             cmdPort	      .equ	  $DA	 ; port for HD44780 command register
+0013   0000             dataPort	  .equ	  $DB	 ; port for HD44780 data register 
+0014   0000             
+0015   0000             ; HD44780 Controller Commands 
+0016   0000             ;
+0017   0000             CLEAR_DISPLAY .equ    $01    ; clear screen command
+0018   0000             LOAD_SYMBOL   .equ    $40    ; set CG-RAM address
+0019   0000             SET_CURSOR    .equ    $80    ; set display RAM address
+0020   0000             
+0021   0000             ; program constants
+0022   0000             ;
+0023   0000             COL           .equ 4         ; starting column 
+0024   0000             ROW           .equ 1         ; starting row
+0025   0000             SPEED         .equ 12        ; animation speed (in mS)
+0026   0000             
+0027   0100             .ORG $0100
+0028   0100             
+0029   0100             Start:
+0030   0100 CD 77 01        CALL LoadIcons
+0031   0103 CD 99 01        CALL ClearScreen
+0032   0106 16 00           LD   D,0                 ; D = current bar value
+0033   0108             hb1:
+0034   0108 ED 5F           LD   A,R                 ; get random #
+0035   010A E6 3F           AND  $3F                 ; mask upper2 bits (max value 63)
+0036   010C 32 05 02        LD   (newValue),A        ; use it as new value
+0037   010F BA              CP   D                   ; is it same as current?
+0038   0110 28 F6           JR   Z,hb1               ; if so, pick again
+0039   0112 CD 4F 01        CALL GetSign 
+0040   0115 CD 32 01        CALL AnimateHBar
+0041   0118 CD 65 01        CALL ExitOnKeypress
+0042   011B C3 08 01        JP   hb1                 ; go back to row 0
+0043   011E                                          ; and loop until keypress
+0044   011E             
+0045   011E             ; Draw a horizontal bar
+0046   011E             ; Call with C=length of bar to be drawn
+0047   011E             ;
+0048   011E             DrawHBar:
+0049   011E 79              LD   A,C                 ; look at current value
+0050   011F D6 05           SUB  5                   ; remove 5 from it
+0051   0121 4F              LD   C,A                 ; save result
+0052   0122 38 07           JR   C,dhb0              ; skip if less than 5
+0053   0124 3E FF           LD   A,$FF                 
+0054   0126 CD 91 01        CALL SendChar            ; draw full 5 bars
+0055   0129 18 F3           JR   DrawHBar
+0056   012B             dhb0:                        ; get here when remainder <5
+0057   012B C8              RET  Z                   ; if 0, no need to print more
+0058   012C C6 05           ADD  A,5                 ; undo last subract
+0059   012E CD 91 01        CALL SendChar            ; print it as 1-4 bars
+0060   0131 C9              RET
+0061   0132             
+0062   0132             
+0063   0132             ; Draw an animated bar
+0064   0132             ; call with D= current bar length, newValue=final value, sign=-1,+1
+0065   0132             ; with each loop it incr/decr D according to value of sign byte
+0066   0132             ; on exit, D=new bar height (D=newValue)
+0067   0132             ;
+0068   0132             AnimateHBar:
+0069   0132 3E 01           LD   A,ROW                 ; reset cursor location
+0070   0134 06 04           LD   B,COL                
+0071   0136 CD A8 01        CALL GotoRC
+0072   0139 4A              LD   C,D
+0073   013A CD 1E 01        CALL DrawHBar            ; draw the bar
+0074   013D 01 0C 00        LD   BC,SPEED           
+0075   0140 CD CC 01        CALL DELAY_BC            ; animation delay
+0076   0143 3A 04 02        LD   A,(sign)
+0077   0146 82              ADD  A,D                 ; incr/decr width by 1 bar
+0078   0147 57              LD   D,A                 ; update bar width
+0079   0148 3A 05 02        LD   A,(newValue)        
+0080   014B BA              CP   D                   ; compare with new value
+0081   014C 20 E4           JR   NZ,AnimateHBar      ; loop until NV reached
+0082   014E C9              RET
+0083   014F             
+0084   014F             ; call with current value in D, new value in newValue
+0085   014F             ; return with sign in A
+0086   014F             GetSign:
+0087   014F 3A 05 02        LD   A,(newValue)
+0088   0152 92              SUB  D
+0089   0153 28 0A           JR   Z,GS2
+0090   0155 38 04           JR   C,GS1
+0091   0157 3E 01           LD   A,1
+0092   0159 18 06           JR   GS3 
+0093   015B             GS1:
+0094   015B 3E FF           LD   A,$FF
+0095   015D 18 02           JR   GS3
+0096   015F             GS2: 
+0097   015F 3E 00           LD   A,0
+0098   0161             GS3:
+0099   0161 32 04 02        LD   (sign),A
+0100   0164 C9              RET 
+0101   0165             
+0102   0165             
+0103   0165             ExitOnKeypress:
+0104   0165 C5              PUSH BC
+0105   0166 D5              PUSH DE 
+0106   0167 E5              PUSH HL
+0107   0168 0E 80           LD   C,$80               ; for current console.
+0108   016A 06 02           LD   B,$02               ; check char input buffer
+0109   016C CF              RST  08                  ; call the HBIOS routine
+0110   016D E1              POP  HL
+0111   016E D1              POP  DE
+0112   016F C1              POP  BC 
+0113   0170 C8              RET  Z                   ; nothing waiting, so return
+0114   0171 CD 99 01        CALL ClearScreen         ; clear the screen
+0115   0174 C3 00 00        JP  0                    ; & return to CP/M
+0116   0177             
+0117   0177             
+0118   0177             LoadIcons:
+0119   0177 3E 40           LD   A,LOAD_SYMBOL     
+0120   0179 CD 89 01        CALL SendCommand         ; send "set CGRAM address=0" cmd
+0121   017C 21 D8 01        LD   HL,HBAR0            ; point to icons to be loaded
+0122   017F 06 28           LD   B,40                ; sending 40 bytes = 5 icons
+0123   0181             li0:
+0124   0181 7E              LD   A,(HL)              ; get icon data byte
+0125   0182 CD 91 01        Call SendChar            ; send it
+0126   0185 23              INC  HL                  ; point to next byte
+0127   0186 10 F9           DJNZ li0                 ; loop until all sent
+0128   0188 C9              RET 
+0129   0189             
+0130   0189             
+0131   0189             ;=============================================================
+0132   0189             ;
+0133   0189             ;   LCD ROUTINES
+0134   0189             ;
+0135   0189             
+0136   0189             SendCommand:
+0137   0189 D3 DA           OUT (cmdPort),A          ; send the command
+0138   018B DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0139   018D 07              RLCA                     ; move status bit to carry 
+0140   018E 38 FB           JR  C,$-3                ; wait until ready
+0141   0190 C9              RET
+0142   0191             
+0143   0191             SendChar:
+0144   0191 D3 DB           OUT (dataPort),A         ; send a character to LCD
+0145   0193 DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0146   0195 07              RLCA                     ; move status bit to carry 
+0147   0196 38 FB           JR  C,$-3                ; wait until ready
+0148   0198 C9              RET
+0149   0199             
+0150   0199             ClearScreen:
+0151   0199 3E 01           LD   A,CLEAR_DISPLAY
+0152   019B CD 89 01        CALL SendCommand
+0153   019E C9              RET 
+0154   019F             
+0155   019F             SendString:
+0156   019F 7E          	LD	A,(HL)			     ; next character to send
+0157   01A0 B7          	OR	A			         ; set flags
+0158   01A1 C8          	RET	Z			         ; done on null
+0159   01A2 CD 91 01    	CALL SendChar            ; send the character
+0160   01A5 23          	INC	HL			         ; point to next char
+0161   01A6 18 F7       	JR	SendString    	     ; and loop until done
+0162   01A8             
+0163   01A8             
+0164   01A8             ; MOVE LCD CURSOR TO A=ROW(0-3), B=COLUMN(0-19)
+0165   01A8             ;
+0166   01A8             GotoRC:
+0167   01A8 F5              PUSH AF
+0168   01A9 D5              PUSH DE 
+0169   01AA E5              PUSH HL 
+0170   01AB 21 00 02        LD   HL,LINEDAT          ; point to line offset table
+0171   01AE 5F              LD   E,A               
+0172   01AF 16 00           LD   D,0                 ; DE = row
+0173   01B1 19              ADD  HL,DE               ; point to desired line offset
+0174   01B2 7E              LD   A,(HL)              ; A now = addr of line start
+0175   01B3 80              ADD  A,B                 ; add in column
+0176   01B4 F6 80           OR   SET_CURSOR          ; add "set DDRAM address"  
+0177   01B6 CD 89 01        CALL SendCommand         ; send the command
+0178   01B9 E1              POP  HL 
+0179   01BA D1              POP  DE
+0180   01BB F1              POP  AF
+0181   01BC C9              RET
+0182   01BD             
+0183   01BD                 
+0184   01BD             ;=============================================================
+0185   01BD             ;
+0186   01BD             ;   DELAY ROUTINES
+0187   01BD             ;
+0188   01BD             ;
+0189   01BD             ; THESE ROUTINES ARE BASED ON A Z-80 CPU CLOCK OF 7.3728 MHz
+0190   01BD             ; At that frequency, each T-state takes 0.1356 uS.
+0191   01BD             ; 1 millisecond delay requires 7373 T-states.
+0192   01BD             ;
+0193   01BD             
+0194   01BD             ; DELAY_INNER:
+0195   01BD             ; This is a helper routine for DELAY_BC.
+0196   01BD             ;
+0197   01BD             ; The desired length = 7348T, slightly shorter than 1mS
+0198   01BD             ; The call itself takes 17T, leaving 7331T in the routine.
+0199   01BD             ; Saving/restoring registers,loading BC and returning takes 41T,
+0200   01BD             ; leaving 7290T for the delay loop.  This is done with
+0201   01BD             ; 303 loops of 24T, plus 18T padding at the end.
+0202   01BD             ; 
+0203   01BD             DELAY_INNER:
+0204   01BD C5              PUSH BC                 ; 11T
+0205   01BE 01 2F 01        LD  BC,303              ; 10T
+0206   01C1             J03:                        ; Loop = 24*bc = 7272T
+0207   01C1 0B              DEC BC                  ; 6T
+0208   01C2 78              LD  A,B                 ; 4T
+0209   01C3 B1              OR  C                   ; 4T
+0210   01C4 C2 C1 01        JP  NZ,J03              ; 10T 
+0211   01C7 03              INC BC                  ; add +18T padding
+0212   01C8 03              INC BC
+0213   01C9 03              INC BC
+0214   01CA C1              POP BC                  ; 10T
+0215   01CB C9              RET                     ; 10T
+0216   01CC             
+0217   01CC             ; DELAY_BC is called with BC= desired delay in milliseconds
+0218   01CC             ; when finished, BC=0.
+0219   01CC             ;
+0220   01CC             ; Actual Time Delay, in T-states:
+0221   01CC             ; loading BC & calling DELAY_BC:  27T
+0222   01CC             ; DELAY_BC itself:  7372*BC + 31T
+0223   01CC             ; TOTAL = 7372*BC + 58
+0224   01CC             ; For example, 1 second: 7372*1000 + 58 = 7,372,058T (999.9mS)
+0225   01CC             ; 
+0226   01CC             DELAY_BC:
+0227   01CC F5              PUSH AF                 ; 11T
+0228   01CD             J04:                        ; bc * 7372T
+0229   01CD CD BD 01        CALL DELAY_INNER        ; 7348T
+0230   01D0 0B              DEC BC                  ; 6T
+0231   01D1 78              LD  A,B                 ; 4T
+0232   01D2 B1              OR  C                   ; 4T
+0233   01D3 C2 CD 01        JP  NZ,J04              ; 10T 
+0234   01D6 F1              POP AF                  ; 10T
+0235   01D7 C9              RET                     ; 10T 
+0236   01D8             
+0237   01D8             ;=============================================================
+0238   01D8             ;
+0239   01D8             ;   PROGRAM CONSTANTS
+0240   01D8             ;
+0241   01D8             
+0242   01D8 00 00 00 00 HBAR0     .DB $00,$00,$00,$00,$00,$00,$00,$00
+0242   01DC 00 00 00 00 
+0243   01E0 10 10 10 10 HBAR1     .DB $10,$10,$10,$10,$10,$10,$10,$10
+0243   01E4 10 10 10 10 
+0244   01E8 18 18 18 18 HBAR2     .DB $18,$18,$18,$18,$18,$18,$18,$18
+0244   01EC 18 18 18 18 
+0245   01F0 1C 1C 1C 1C HBAR3     .DB $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
+0245   01F4 1C 1C 1C 1C 
+0246   01F8 1E 1E 1E 1E HBAR4     .DB $1E,$1E,$1E,$1E,$1E,$1E,$1E,$1E
+0246   01FC 1E 1E 1E 1E 
+0247   0200             
+0248   0200 00 40 14 54 LINEDAT   .DB $00,$40,$14,$54
+0249   0204             
+0250   0204             ;=============================================================
+0251   0204             ;
+0252   0204             ;   PROGRAM VARIABLES
+0253   0204             ;
+0254   0204             
+0255   0204 00          sign      .DB 0
+0256   0205 00          newValue  .DB 0
+0257   0206             
+0258   0206             .ENDtasm: Number of errors = 0

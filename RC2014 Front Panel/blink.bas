@@ -1,0 +1,11 @@
+20 REM
+30 REM   BLINK.BAS
+40 REM   by Bruce E. Hall, 26 Aug 2026
+50 REM
+60 REM   Blinkenlights on the front
+70 REM   panel LEDs.
+80 REM
+100 I=INT(RND*256)
+110 OUT 0,I
+120 FOR J=1 TO 200:NEXT J
+140 GOTO 100

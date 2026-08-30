@@ -1,0 +1,12 @@
+20 REM
+30 REM   COUNT.BAS
+40 REM   by Bruce E. Hall, 26 Aug 2026
+50 REM
+60 REM   Count in binary on the front
+70 REM   panel LEDs.
+80 REM
+100 FOR I=0 TO 255
+110 OUT 0,I
+120 FOR J=1 TO 200:NEXT J
+130 NEXT I
+140 GOTO 100

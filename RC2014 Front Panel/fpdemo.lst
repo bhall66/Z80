@@ -1,0 +1,1584 @@
+0001   0000             ;
+0002   0000             ;   Title:   fpdemo.asm
+0003   0000             ;  Author:   Bruce E. Hall, w8bh
+0004   0000             ;    Date:   30 Aug 2026
+0005   0000             ;      HW:   RC2014Zed with 512K RAM/ROM module
+0006   0000             ;      SW:   TASM compiler, RomWBW firmware
+0007   0000             ;
+0008   0000             ;  Exercise the front panel switches and 20x4 char LCD display
+0009   0000             ;  The demo is selected by console keypress
+0010   0000             ;
+0011   0000             ;  Keypress        Demo
+0012   0000             ;      0           Switch positions shown on LEDs and LCD
+0013   0000             ;      1           Multi-line text & random characters
+0014   0000             ;      2           Animated battery icon
+0015   0000             ;      3           Large 4-digit clock
+0016   0000             ;      4           Large 6-digit clock
+0017   0000             ;      5           Animated sine wave
+0018   0000             ;      6           Animated vertical bar graph
+0019   0000             ;      7           Animated horizontal bar graph
+0020   0000             ;      8           Blinkenlights
+0021   0000             ;      9           Larson Scanner
+0022   0000             ;      A           Binary Counting - Increment
+0023   0000             ;      B           Binary Counting - Decrement
+0024   0000             ; 
+0025   0000             ;  Press any other key to stop the demo.
+0026   0000             ;
+0027   0000             
+0028   0000             cmdPort	      .equ	  $DA	 ; port for HD44780 command register
+0029   0000             dataPort	  .equ	  $DB	 ; port for HD44780 data register 
+0030   0000             
+0031   0000             ; HD44780 Controller Commands 
+0032   0000             ;
+0033   0000             CLEAR_DISPLAY .equ    $01    ; clear screen command
+0034   0000             CURSOR_HOME   .equ    $02    ; home the cursor
+0035   0000             DISPLAY_OFF   .equ    $08    ; turn display off
+0036   0000             DISPLAY_ON    .equ    $0C    ; display on with no cursor
+0037   0000             CURSOR_ON     .equ    $0E    ; display on with underline cursor
+0038   0000             CURSOR_BLINK  .equ    $0F    ; display on with blinking block cursor
+0039   0000             CURSOR_LEFT   .equ    $10    ; move cursor left
+0040   0000             CURSOR_RIGHT  .equ    $14    ; move cursor right
+0041   0000             DISP_INIT4    .equ    $28    ; initialize display for 4-bit input
+0042   0000             DISP_INIT8    .equ    $38    ; initialize display for 8-bit input
+0043   0000             LOAD_SYMBOL   .equ    $40    ; set CG-RAM address
+0044   0000             SET_CURSOR    .equ    $80    ; set display RAM address
+0045   0000             
+0046   0000             ; program constants
+0047   0000             ;
+0048   0000             LMARGIN       .equ 5         ; starting column for vertical bars
+0049   0000             NUMBARS       .equ 15        ; number of vertical bars to show
+0050   0000             SPEED         .equ 12        ; animation speed (in mS)
+0051   0000             
+0052   0100             .ORG $0100
+0053   0100             
+0054   0100             Start:
+0055   0100 21 49 0A        LD   HL,introMsg         ; point to text
+0056   0103             st0:
+0057   0103 CD FC 04        CALL PrintStr            ; Print a string
+0058   0106 CD 05 05        CALL CRLF                ; Print CRLF (new line)
+0059   0109 23              INC  HL                  ; Advance to next string
+0060   010A 7E              LD   A,(HL)              ; Look at next character
+0061   010B FE 24           CP   '$'                 ; end-of-message marker?
+0062   010D 20 F4           JR   NZ,st0              ; loop until marker found
+0063   010F                                          ; done, fall to Switch demo below
+0064   010F             
+0065   010F             SwitchDemo:
+0066   010F 21 8C 06        LD   HL,SWITCH2          ; point to first switch icon
+0067   0112 06 10           LD   B,16                ; 16 bytes = 2 icons
+0068   0114 CD 40 05        CALL LoadIcons           ; load both icons
+0069   0117 21 A8 09        LD   HL,switchMsg
+0070   011A CD F4 05        CALL LabelDemo
+0071   011D             dn1:
+0072   011D CD 3E 01        CALL HandleUser          ; allow user break
+0073   0120 DB 00           IN   A,(0)               ; get switch input
+0074   0122 BA              CP   D                   ; still the same?
+0075   0123 28 F8           JR   Z,dn1               ; loop until different
+0076   0125 57              LD   D,A                 ; save result 
+0077   0126 D3 00           OUT  (0),A               ; show result on FP leds
+0078   0128 3E 02           LD   A,2
+0079   012A 06 0A           LD   B,10
+0080   012C CD 4D 05        CALL GotoRC              ; position cursor 
+0081   012F 06 08           LD   B,8                 ; prepare to write 8 chars
+0082   0131             dn2:
+0083   0131 AF              XOR  A                   ; assume icon 0
+0084   0132 CB 12           RL   D                   ; roll bit into carry
+0085   0134 30 01           JR   NC,dn3              ; nc = bit is 0
+0086   0136 3C              INC  A                   ; set icon 1
+0087   0137             dn3:
+0088   0137 CD 29 05        CALL SendChar            ; show the switch icon 
+0089   013A 10 F5           DJNZ dn2                 ; loop for all 8 bits
+0090   013C 18 DF           JR   dn1                 ; loop forever
+0091   013E             
+0092   013E             
+0093   013E             ; Check for console input.  Return if no console input waiting.
+0094   013E             ; Otherwise, attempt to convert keypress to hex digit 0-F and jump to the 
+0095   013E             ; corresponding demo routine
+0096   013E             ;
+0097   013E             HandleUser:
+0098   013E CD 0F 06        CALL CheckKeypress       ; look for console input
+0099   0141 C8              RET  Z                   ; return if no keypress waiting
+0100   0142 D3 00           OUT  (0),A               ; show result on FP leds
+0101   0144 21 DB 0C        LD   HL,selection
+0102   0147 BE              CP   (HL)                ; did selection change?
+0103   0148 C8              RET  Z                   ; return if no change
+0104   0149 77              LD  (HL),A               ; save selection
+0105   014A C1              POP  BC                  ; remove caller from stack  
+0106   014B             
+0107   014B                 ; At this point, A contains the selected user program, 0-F.
+0108   014B                 ; use this value to index into a table of addresses, then jump to
+0109   014B                 ; the desired routine.
+0110   014B             
+0111   014B 21 5C 06        LD   HL,vectTable        ; point to the jump table
+0112   014E CB 27           SLA  A                   ; A x 2
+0113   0150 16 00           LD   D,0 
+0114   0152 5F              LD   E,A                 ; DE = 2A
+0115   0153 19              ADD  HL,DE               ; HL = jumpTable + 2A
+0116   0154 7E              LD   A,(HL)              ; get LSB
+0117   0155 23              INC  HL 
+0118   0156 66              LD   H,(HL)              ; get MSB
+0119   0157 6F              LD   L,A                 ; HL = MSB,LSB
+0120   0158 E9              JP   (HL)                ; go!
+0121   0159             
+0122   0159             
+0123   0159             ;=============================================================
+0124   0159             ;
+0125   0159             ;   LED ANIMATION ROUTINES
+0126   0159             ;
+0127   0159             
+0128   0159             BlinkDemo:
+0129   0159 21 D3 09        LD   HL,blinkMsg
+0130   015C CD F4 05        CALL LabelDemo
+0131   015F             bl0:
+0132   015F CD 3E 01        CALL HandleUser          ; check for user break
+0133   0162 CD AD 05        CALL Random              ; A = random number
+0134   0165 D3 00           OUT  (0),A               ; show it on LEDs
+0135   0167 01 C8 00        LD   BC,200
+0136   016A CD A1 05        CALL DELAY_BC            ; animation delay
+0137   016D 18 F0           JR   bl0                 ; do it forever
+0138   016F             
+0139   016F             IncDemo:
+0140   016F 21 B1 09        LD   HL,binUpMsg
+0141   0172 CD F4 05        CALL LabelDemo
+0142   0175             ld0:  
+0143   0175 CD 3E 01        CALL HandleUser          ; check for user break
+0144   0178 7A              LD   A,D                 ; D = counter
+0145   0179 D3 00           OUT (0),A                ; show counter on LEDs
+0146   017B 01 C8 00        LD   BC,200
+0147   017E CD A1 05        CALL DELAY_BC            ; animation delay
+0148   0181 14              INC  D                   ; increment the counter
+0149   0182 18 F1           JR   ld0                 ; loop forever
+0150   0184             
+0151   0184             DecDemo:
+0152   0184 21 C1 09        LD   HL,binDnMsg
+0153   0187 CD F4 05        CALL LabelDemo
+0154   018A             ld1:  
+0155   018A CD 3E 01        CALL HandleUser          ; check for user break
+0156   018D 7A              LD   A,D                 ; D = counter
+0157   018E D3 00           OUT (0),A                ; show counter on LEDs
+0158   0190 01 C8 00        LD  BC,200
+0159   0193 CD A1 05        CALL DELAY_BC            ; animation delay
+0160   0196 15              DEC D                    ; decrement counter
+0161   0197 18 F1           JR  ld1                  ; loop forever
+0162   0199             
+0163   0199             CylonDemo:
+0164   0199 21 E1 09        LD   HL,cylonMsg
+0165   019C CD F4 05        CALL LabelDemo
+0166   019F             ld5:
+0167   019F 3E 01           LD   A,1 
+0168   01A1             ld3:
+0169   01A1 D3 00           OUT  (0),A 
+0170   01A3 01 64 00        LD   BC,100
+0171   01A6 CD A1 05        CALL DELAY_BC
+0172   01A9 CB 17           RL   A                   ; rotate left through carry
+0173   01AB 30 F4           JR   NC,ld3 
+0174   01AD CB 1F           RR   A                   ; undo last rotate, 1->b7
+0175   01AF             ld4:
+0176   01AF D3 00           OUT  (0),A 
+0177   01B1 01 64 00        LD   BC,100
+0178   01B4 CD A1 05        CALL DELAY_BC
+0179   01B7 CB 1F           RR   A                   ; rotate right through carry
+0180   01B9 30 F4           JR   NC,ld4 
+0181   01BB CB 17           RL   A                   ; undo last rotate, 1->b0
+0182   01BD CD 3E 01        CALL HandleUser          ; check for user break
+0183   01C0 18 DD           JR   ld5                 ; loop forever
+0184   01C2             
+0185   01C2             
+0186   01C2             ;=============================================================
+0187   01C2             ;
+0188   01C2             ;   BATTERY ANIMATION ROUTINES
+0189   01C2             ;
+0190   01C2             DoBattery:
+0191   01C2 21 9C 08        LD   HL,BATT0            ; point to first battery icon
+0192   01C5 06 30           LD   B,48                ; 48 bytes to load
+0193   01C7 CD 40 05        CALL LoadIcons           ; load all 6 icons
+0194   01CA 21 F0 09        LD   HL,iconMsg
+0195   01CD CD D9 05        CALL LabelIt             ; "ICON DEMO"
+0196   01D0             db0:
+0197   01D0 16 00           LD   D,0                 ; D = icon counter
+0198   01D2             db1:
+0199   01D2 3E 01           LD   A,1
+0200   01D4 06 08           LD   B,8
+0201   01D6 CD 4D 05        CALL GotoRC              ; set cursor
+0202   01D9 7A              LD   A,D                 ; get icon #
+0203   01DA CD 29 05        CALL SendChar            ; and display it
+0204   01DD 01 FA 00        LD   BC,250
+0205   01E0 CD A1 05        CALL DELAY_BC            ; animation delay
+0206   01E3 CD 3E 01        CALL HandleUser
+0207   01E6 14              INC  D                   ; advance to next icon
+0208   01E7 7A              LD   A,D 
+0209   01E8 FE 06           CP   6                   ; done?
+0210   01EA 20 E6           JR   NZ,db1              ; loop for all icons
+0211   01EC 18 E2           JR   db0                 ; back to first icon
+0212   01EE             
+0213   01EE             
+0214   01EE             ;=============================================================
+0215   01EE             ;
+0216   01EE             ;   SINE WAVE ROUTINES
+0217   01EE             ;
+0218   01EE             DoWave:
+0219   01EE 21 F5 09        LD   HL,signMsg
+0220   01F1 CD D9 05        CALL LabelIt             ; display "Sine Test"
+0221   01F4 CD 24 02        CALL LoadVBarIcons       ; load icons needed for vbars
+0222   01F7 16 00           LD   D,0                 ; D is the phase counter
+0223   01F9             L03:
+0224   01F9 1E 00           LD   E,0                 ; first bar (E is bar counter)
+0225   01FB             L02:
+0226   01FB 7B              LD   A,E 
+0227   01FC 82              ADD  A,D                 ; add in phase offset
+0228   01FD 06 0F           LD   B,15                ; use modulo fn
+0229   01FF CD D0 05        CALL IntDiv              ; to force 0-14 range
+0230   0202 CD 5F 02        CALL GetSine             ; A = 15*sin(A*24)+16
+0231   0205 4F              LD   C,A                 ; save result in C
+0232   0206 7B              LD   A,E 
+0233   0207 C6 05           ADD  A,LMARGIN           ; left margin
+0234   0209 47              LD   B,A                 ; to use as column #
+0235   020A CD 4C 02        CALL EraseVBar
+0236   020D CD 2D 02        CALL DrawVBar            ; show the bar            
+0237   0210 23              INC  HL                  ; point to value of next bar
+0238   0211 1C              INC  E                   ; bump bar counter
+0239   0212 3E 0F           LD   A,NUMBARS                 
+0240   0214 BB              CP   E                   ; done with last bar yet? 
+0241   0215 20 E4           JR   NZ,L02              ; no, go to next bar
+0242   0217 14              INC  D                   ; go to next phase
+0243   0218 CD 3E 01        CALL HandleUser       ; see if user wants to quit
+0244   021B 01 C8 00        LD   BC,200
+0245   021E CD A1 05        CALL DELAY_BC            ; 1 second delay before repeating
+0246   0221 C3 F9 01        JP   L03                 ; go back to first bar
+0247   0224                                          ; and loop until keypress 
+0248   0224             
+0249   0224             LoadVBarIcons:
+0250   0224 21 54 07        LD   HL,VBAR0            ; point to first vbar icon
+0251   0227 06 40           LD   B,64                ; load 64 bytes (8 icons)
+0252   0229 CD 40 05        CALL LoadIcons
+0253   022C C9              RET 
+0254   022D             
+0255   022D             ; draw a vertical bar with B=column & C=height(0-32)
+0256   022D             DrawVBar:
+0257   022D 3E 03           LD   A,3
+0258   022F CD 4D 05        CALL GotoRC              ; position @ bottom of column
+0259   0232             DVB2:
+0260   0232 F5              PUSH AF                  ; save A=row on stack
+0261   0233 79              LD   A,C                 ; look at current value
+0262   0234 D6 08           SUB  8                   ; remove 8 from it
+0263   0236 4F              LD   C,A                 ; save result
+0264   0237 38 0C           JR   C,DVB1              ; skip if less than 8
+0265   0239 3E FF           LD   A,$FF                 
+0266   023B CD 29 05        CALL SendChar            ; draw full 8 bars
+0267   023E F1              POP  AF                  ; restore row
+0268   023F 3D              DEC  A                   ; go up one row
+0269   0240 CD 4D 05        CALL GotoRC              ; and set cursor there
+0270   0243 18 ED           JR   DVB2
+0271   0245             DVB1:                        ; get here when remainder <8
+0272   0245 C6 08           ADD  A,8                 ; undo last subract
+0273   0247 CD 29 05        CALL SendChar            ; print it as 1-7 bars
+0274   024A F1              POP  AF                  ; restore row
+0275   024B C9              RET
+0276   024C             
+0277   024C             ; call with B=col# of the vbar to erase
+0278   024C             EraseVBar:
+0279   024C C5              PUSH BC
+0280   024D 3E 03           LD   A,3 
+0281   024F             ev1:
+0282   024F CD 4D 05        CALL GotoRC 
+0283   0252 4F              LD   C,A  
+0284   0253 3E 20           LD   A,$20
+0285   0255 CD 29 05        CALL SendChar
+0286   0258 79              LD   A,C 
+0287   0259 3D              DEC  A 
+0288   025A F2 4F 02        JP   P,ev1
+0289   025D C1              POP  BC 
+0290   025E C9              RET 
+0291   025F             
+0292   025F             ; return A = 15*sin(24*A)+16, where A is 0-14
+0293   025F             ; uses HL
+0294   025F             GetSine:
+0295   025F D5              PUSH DE
+0296   0260 16 00           LD   D,0
+0297   0262 5F              LD   E,A                 ; DE = A
+0298   0263 21 B3 0C        LD   HL,sine             ; point to table       
+0299   0266 19              ADD  HL,DE               ; point to table value
+0300   0267 7E              LD   A,(HL)              ; get table value
+0301   0268 D1              POP  DE
+0302   0269 C9              RET 
+0303   026A             
+0304   026A             
+0305   026A             ;=============================================================
+0306   026A             ;
+0307   026A             ;   HBAR ROUTINES
+0308   026A             
+0309   026A             DoHBar:
+0310   026A 21 94 07        LD   HL,HBAR0            ; point to first hbar icon
+0311   026D 06 30           LD   B,48                ; load 48 bytes (5 icons)
+0312   026F CD 40 05        CALL LoadIcons
+0313   0272 21 04 0A        LD   HL,hbarMsg
+0314   0275 CD D9 05        CALL LabelIt             ; display "HBar test"
+0315   0278             hb3:
+0316   0278 21 C4 0C        LD   HL,values
+0317   027B 1E 00           LD   E,0                 ; row counter
+0318   027D             hb2:
+0319   027D 56              LD   D,(HL)              ; load current bar value
+0320   027E             hb1:
+0321   027E ED 5F           LD   A,R                 ; get random #
+0322   0280 E6 3F           AND  $3F                 ; mask upper2 bits (max value 63)
+0323   0282 32 C3 0C        LD   (newValue),A        ; use it as new value
+0324   0285 BA              CP   D                   ; is it same as current?
+0325   0286 28 F6           JR   Z,hb1               ; if so, pick again
+0326   0288 CD 26 03        CALL GetSign 
+0327   028B CD A2 02        CALL AnimateHBar
+0328   028E 72              LD   (HL),D              ; save bar value
+0329   028F 23              INC  HL                  ; point to value of next row
+0330   0290 1C              INC  E                   ; bump row counter
+0331   0291 3E 04           LD   A,4                 
+0332   0293 BB              CP   E                   ; get to 4th row yet? 
+0333   0294 20 E7           JR   NZ,hb2              ; no, go to next row
+0334   0296 CD 3E 01        CALL HandleUser
+0335   0299 01 F4 01        LD   BC,500
+0336   029C CD A1 05        CALL DELAY_BC            ; short delay before repeating
+0337   029F C3 78 02        JP   hb3                 ; go back to row 0
+0338   02A2                                          ; and loop until keypress
+0339   02A2             
+0340   02A2             ; call with D=bar height, newValue=final value, sign=-1,+1
+0341   02A2             ; each loop with incr/decr D according to sign
+0342   02A2             ; on exit, D=new bar height (D=newValue)
+0343   02A2             ;
+0344   02A2             AnimateHBar:
+0345   02A2 7B              LD   A,E                 ; reset cursor location
+0346   02A3 06 05           LD   B,LMARGIN               
+0347   02A5 CD 4D 05        CALL GotoRC 
+0348   02A8 4A              LD   C,D
+0349   02A9 CD BE 02        CALL DrawHBar            ; draw the bar
+0350   02AC 01 0C 00        LD   BC,SPEED           
+0351   02AF CD A1 05        CALL DELAY_BC            ; animation delay
+0352   02B2 3A C2 0C        LD   A,(sign)
+0353   02B5 82              ADD  A,D                 ; incr/decr width by 1 bar
+0354   02B6 57              LD   D,A                 ; update bar width
+0355   02B7 3A C3 0C        LD   A,(newValue)        
+0356   02BA BA              CP   D                   ; compare with new value
+0357   02BB 20 E5           JR   NZ,AnimateHBar      ; loop until NV reached
+0358   02BD C9              RET
+0359   02BE             
+0360   02BE             DrawHBar:
+0361   02BE 79              LD   A,C                 ; look at current value
+0362   02BF D6 05           SUB  5                   ; remove 5 from it
+0363   02C1 4F              LD   C,A                 ; save result
+0364   02C2 38 07           JR   C,dhb0              ; skip if less than 5
+0365   02C4 3E 05           LD   A,5                 
+0366   02C6 CD 29 05        CALL SendChar            ; draw full 5 bars
+0367   02C9 18 F3           JR   DrawHBar
+0368   02CB             dhb0:                        ; get here when remainder <5
+0369   02CB C8              RET  Z                   ; if 0, no need to print more
+0370   02CC C6 05           ADD  A,5                 ; undo last subract
+0371   02CE CD 29 05        CALL SendChar            ; print it as 1-4 bars
+0372   02D1 C9              RET
+0373   02D2             
+0374   02D2             
+0375   02D2             ;=============================================================
+0376   02D2             ; 
+0377   02D2             ;   VBAR ROUTINES
+0378   02D2             ;
+0379   02D2             
+0380   02D2             DoVBar:
+0381   02D2 21 FF 09        LD   HL,vbarMsg
+0382   02D5 CD D9 05        CALL LabelIt             ; display "VBar Test"
+0383   02D8 CD 24 02        CALL LoadVBarIcons       ; load icons needed for vbars
+0384   02DB             vb3:
+0385   02DB 21 C4 0C        LD   HL,values           ; first bar value
+0386   02DE 1E 00           LD   E,0                 ; first bar (E is bar counter)
+0387   02E0             vb2
+0388   02E0 56              LD   D,(HL)              ; load current bar value
+0389   02E1             vb1
+0390   02E1 ED 5F           LD   A,R                 ; get random #
+0391   02E3 E6 1F           AND  $1F                 ; mask upper3 bits (max value 31)
+0392   02E5 32 C3 0C        LD   (newValue),A        ; use it as new value
+0393   02E8 BA              CP   D                   ; is it same as current?
+0394   02E9 28 F6           JR   Z,vb1               ; if so, pick again
+0395   02EB CD 26 03        CALL GetSign 
+0396   02EE CD 05 03        CALL AnimateVBar
+0397   02F1 72              LD   (HL),D              ; save bar value               
+0398   02F2 23              INC  HL                  ; point to value of next bar
+0399   02F3 1C              INC  E                   ; bump bar counter
+0400   02F4 3E 0F           LD   A,NUMBARS                 
+0401   02F6 BB              CP   E                   ; done with last bar yet? 
+0402   02F7 20 E7           JR   NZ,vb2              ; no, go to next bar
+0403   02F9 CD 3E 01        CALL HandleUser       ; see if user wants to quit
+0404   02FC 01 E8 03        LD   BC,1000
+0405   02FF CD A1 05        CALL DELAY_BC            ; 1 second delay before repeating
+0406   0302 C3 DB 02        JP   vb3                 ; loop forever
+0407   0305             
+0408   0305             
+0409   0305             ; call with D=bar height, newValue=final value, sign=-1,+1
+0410   0305             ; each loop with incr/decr D according to sign
+0411   0305             ; on exit, D=new bar height (D=newValue)
+0412   0305             ;
+0413   0305             AnimateVBar:
+0414   0305 3E 05           LD   A,LMARGIN           ; left margin
+0415   0307 83              ADD  A,E                 ; add in bar counter
+0416   0308 47              LD   B,A                 ; to use as column #
+0417   0309 3E 03           LD   A,3                 ; start vbar on bottom row                             
+0418   030B CD 4D 05        CALL GotoRC
+0419   030E 4A              LD   C,D
+0420   030F CD 2D 02        CALL DrawVBar            ; draw the bar
+0421   0312 C5              PUSH BC 
+0422   0313 01 0C 00        LD   BC,SPEED           
+0423   0316 CD A1 05        CALL DELAY_BC            ; animation delay
+0424   0319 C1              POP  BC 
+0425   031A 3A C2 0C        LD   A,(sign)
+0426   031D 82              ADD  A,D                 ; incr/decr width by 1 bar
+0427   031E 57              LD   D,A                 ; update bar width
+0428   031F 3A C3 0C        LD   A,(newValue)        
+0429   0322 BA              CP   D                   ; compare with new value
+0430   0323 20 E0           JR   NZ,AnimateVBar      ; loop until NV reached
+0431   0325 C9              RET
+0432   0326             
+0433   0326             ; call with current value in D, new value in newValue
+0434   0326             ; return with sign in A
+0435   0326             GetSign:
+0436   0326 3A C3 0C        LD   A,(newValue)
+0437   0329 92              SUB  D
+0438   032A 28 0A           JR   Z,GS2
+0439   032C 38 04           JR   C,GS1
+0440   032E 3E 01           LD   A,1
+0441   0330 18 06           JR   GS3 
+0442   0332             GS1:
+0443   0332 3E FF           LD   A,$FF
+0444   0334 18 02           JR   GS3
+0445   0336             GS2: 
+0446   0336 3E 00           LD   A,0
+0447   0338             GS3:
+0448   0338 32 C2 0C        LD   (sign),A
+0449   033B C9              RET 
+0450   033C             
+0451   033C             
+0452   033C             ;=============================================================
+0453   033C             ;
+0454   033C             ;   CLOCK ROUTINES
+0455   033C             ;
+0456   033C             
+0457   033C             Clock1:
+0458   033C CD 31 05        CALL ClearScreen
+0459   033F CD 4D 04        CALL LoadDigitIcons      ; load big digit icons
+0460   0342             clk1
+0461   0342 CD 66 03        CALL DisplayTimeHM
+0462   0345 CD 44 04        CALL WaitOneSecond
+0463   0348 CD 96 03        CALL AdvanceTime
+0464   034B CD 3E 01        CALL HandleUser
+0465   034E C3 42 03        JP   clk1
+0466   0351             
+0467   0351             Clock2:
+0468   0351 CD 31 05        CALL ClearScreen
+0469   0354 CD 4D 04        CALL LoadDigitIcons      ; load big digit icons
+0470   0357             clk2:
+0471   0357 CD 7B 03        CALL DisplayTimeHMS
+0472   035A CD 44 04        CALL WaitOneSecond
+0473   035D CD 96 03        CALL AdvanceTime
+0474   0360 CD 3E 01        CALL HandleUser
+0475   0363 C3 57 03        JP   clk2 
+0476   0366             
+0477   0366             DisplayTimeHM:
+0478   0366 0E 00           LD   C,0
+0479   0368 3A DA 0C        LD   A,(hours)
+0480   036B CD DC 03        CALL ShowTwoDigits
+0481   036E CD C4 03        CALL ShowColon
+0482   0371 3A D9 0C        LD   A,(minutes)
+0483   0374 CD DC 03        CALL ShowTwoDigits
+0484   0377 CD 26 04        CALL DisplaySeconds
+0485   037A C9              RET 
+0486   037B             
+0487   037B             DisplayTimeHMS:
+0488   037B 0E 00           LD   C,0
+0489   037D 3A DA 0C        LD   A,(hours)
+0490   0380 CD F6 03        CALL ShowTwoDigits2
+0491   0383 CD C4 03        CALL ShowColon
+0492   0386 3A D9 0C        LD   A,(minutes)
+0493   0389 CD F6 03        CALL ShowTwoDigits2
+0494   038C CD C4 03        CALL ShowColon
+0495   038F 3A D8 0C        LD   A,(seconds)
+0496   0392 CD F6 03        CALL ShowTwoDigits2
+0497   0395 C9              RET
+0498   0396             
+0499   0396             AdvanceTime:
+0500   0396 3A D8 0C        LD   A,(seconds)
+0501   0399 3C              INC  A                   ; advance seconds
+0502   039A FE 3C           CP   60                  ; 60 seconds yet?
+0503   039C 32 D8 0C        LD   (seconds),A
+0504   039F C0              RET  NZ 
+0505   03A0 3E 00           LD   A,0                 ; start new minute
+0506   03A2 32 D8 0C        LD   (seconds),A 
+0507   03A5 3A D9 0C        LD   A,(minutes)    
+0508   03A8 3C              INC  A                   ; advance minutes
+0509   03A9 FE 3C           CP   60                  ; 60 minutes yet?
+0510   03AB 32 D9 0C        LD  (minutes),A 
+0511   03AE C0              RET NZ
+0512   03AF 3E 00           LD  A,0                  ; start new hour
+0513   03B1 32 D9 0C        LD  (minutes),A          
+0514   03B4 3A DA 0C        LD  A,(hours)
+0515   03B7 3C              INC A                    ; advance hour
+0516   03B8 32 DA 0C        LD  (hours),A 
+0517   03BB FE 0D           CP  13                   ; 13th hour yet?
+0518   03BD C0              RET NZ 
+0519   03BE 3E 01           LD  A,1             
+0520   03C0 32 DA 0C        LD  (hours),A            ; reset to 01:00
+0521   03C3 C9              RET 
+0522   03C4             
+0523   03C4             ; uncomment the first 4 instructions to enable colon flash
+0524   03C4             ;
+0525   03C4             ShowColon:
+0526   03C4                 ;LD   A,(seconds)
+0527   03C4                 ;RR   A                   ; rotate bit0 into carry
+0528   03C4                 ;LD   D,6                 ; open colons on odd seconds           
+0529   03C4                 ;JR   C,sc1               ; carry = odd second
+0530   03C4 16 07           LD   D,7                 ; closed colons (icon#7) on even seconds
+0531   03C6             sc1:
+0532   03C6 3E 01           LD   A,1
+0533   03C8 41              LD   B,C
+0534   03C9 CD 4D 05        CALL GotoRC              ; position top colon
+0535   03CC 7A              LD   A,D                 ; get colon char
+0536   03CD CD 29 05        CALL SendChar            ; and display it
+0537   03D0 3E 02           LD   A,2
+0538   03D2 41              LD   B,C
+0539   03D3 CD 4D 05        CALL GotoRC              ; position bottom colon
+0540   03D6 7A              LD   A,D                 ; get colon char
+0541   03D7 CD 29 05        CALL SendChar            ; and display it
+0542   03DA 0C              INC  C                   ; update cursor
+0543   03DB C9              RET 
+0544   03DC             
+0545   03DC             
+0546   03DC             ; call with A=a two digit number, C=left margin
+0547   03DC             ; displays the number as two large digits
+0548   03DC             
+0549   03DC             ShowTwoDigits:
+0550   03DC C5              PUSH BC 
+0551   03DD CD 10 04        CALL TwoDigit             ; break into tens/ones
+0552   03E0 C1              POP  BC                   ; restore margin
+0553   03E1 3A D6 0C        LD   A,(tens)             ; get tens digit
+0554   03E4 CD 56 04        CALL ShowBigDigit         ; and display it
+0555   03E7 79              LD   A,C                  ; get cursor
+0556   03E8 C6 04           ADD  A,4                  ; move over 4 spaces
+0557   03EA 4F              LD   C,A                  ; update cursor
+0558   03EB 3A D7 0C        LD   A,(ones)             ; get ones digit
+0559   03EE CD 56 04        CALL ShowBigDigit         ; and display it
+0560   03F1 79              LD   A,C                  ; get cursor
+0561   03F2 C6 04           ADD  A,4                  ; advance 4 spaces
+0562   03F4 4F              LD   C,A                  ; update cursor   
+0563   03F5 C9              RET 
+0564   03F6             
+0565   03F6             ; call with A=a two digit number, C=left margin
+0566   03F6             ; displays the number as two large digits (close together)
+0567   03F6             
+0568   03F6             ShowTwoDigits2:
+0569   03F6 C5              PUSH BC 
+0570   03F7 CD 10 04        CALL TwoDigit             ; break into tens/ones
+0571   03FA C1              POP  BC                   ; restore margin
+0572   03FB 3A D6 0C        LD   A,(tens)             ; get tens digit
+0573   03FE CD 56 04        CALL ShowBigDigit         ; and display it
+0574   0401 79              LD   A,C                  ; tens digit margin
+0575   0402 C6 03           ADD  A,3                  ; move over 3 spaces
+0576   0404 4F              LD   C,A                  ; for 2nd digit
+0577   0405 3A D7 0C        LD   A,(ones)             ; get ones digit
+0578   0408 CD 56 04        CALL ShowBigDigit         ; and display it
+0579   040B 79              LD   A,C                  ; get cursor
+0580   040C C6 03           ADD  A,3                  ; move over 3 spaces
+0581   040E 4F              LD   C,A                  ; update cursor
+0582   040F C9              RET 
+0583   0410             
+0584   0410             ; Call with A = a two-digit number
+0585   0410             ; Returns with tens-digit in (tens) and ones-digit in (ones)
+0586   0410             ; Uses HL and C
+0587   0410             TwoDigit:
+0588   0410 0E 0A           LD   C,10
+0589   0412 21 D7 0C        LD   HL,ones
+0590   0415 36 00           LD   (HL),0
+0591   0417 21 D6 0C        LD   HL,tens
+0592   041A 36 00           LD   (HL),0
+0593   041C             j06:
+0594   041C 34              INC  (HL) 
+0595   041D 91              SUB  C 
+0596   041E 30 FC           JR   NC,j06
+0597   0420 35              DEC  (HL)
+0598   0421 81              ADD  A,C 
+0599   0422 32 D7 0C        LD   (ones),A
+0600   0425 C9              RET   
+0601   0426             
+0602   0426             DisplaySeconds:
+0603   0426 3E 00           LD   A,0
+0604   0428 06 12           LD   B,18
+0605   042A CD 4D 05        CALL GotoRC               ; position seconds
+0606   042D 3A D8 0C        LD   A,(seconds)          ; get seconds
+0607   0430 CD 10 04        CALL TwoDigit             ; split into 2 digits
+0608   0433 3A D6 0C        LD   A,(tens)             ; get tens digit
+0609   0436 C6 30           ADD  A,'0'                ; convert it to ASCII
+0610   0438 CD 29 05        CALL SendChar             ; and display it
+0611   043B 3A D7 0C        LD   A,(ones)             ; get the ones digit
+0612   043E C6 30           ADD  A,'0'                ; conver it to ASCII
+0613   0440 CD 29 05        CALL SendChar             ; and display it
+0614   0443 C9              RET 
+0615   0444             
+0616   0444             WaitOneSecond:
+0617   0444 C5              PUSH BC 
+0618   0445 01 E8 03        LD   BC,1000              ; wait 1 second
+0619   0448 CD A1 05        CALL DELAY_BC
+0620   044B C1              POP  BC 
+0621   044C C9              RET 
+0622   044D             
+0623   044D             LoadDigitIcons:
+0624   044D 21 CC 08        LD   HL,BDIGIT0          ; point to first digit icon
+0625   0450 06 40           LD   B,64                ; load 64 bytes (8 icons)
+0626   0452 CD 40 05        CALL LoadIcons
+0627   0455 C9              RET 
+0628   0456             
+0629   0456             ; call with A=digit value and C=column offset
+0630   0456             ;
+0631   0456             ShowBigDigit:
+0632   0456 1E 0C           LD   E,12                ; DE = size of each digit defn
+0633   0458 16 00           LD   D,0                        
+0634   045A 21 0C 09        LD   HL,bigDigits        ; point to digit definitions
+0635   045D B7              OR   A                   ; is A=0?
+0636   045E 28 04           JR   Z,sbd2              ; for digit zero, we are done
+0637   0460 47              LD   B,A                 
+0638   0461             sbd1:
+0639   0461 19              ADD  HL,DE               ; point to next digit defn
+0640   0462 10 FD           DJNZ sbd1                ; until desired digit reached
+0641   0464             sbd2:                        ; now HL = HL + (12*digit)
+0642   0464 11 84 09        LD   DE,digitXY          ; point to icon location array
+0643   0467 06 0C           LD   B,12                ; each digit is 3x4=12 icons big
+0644   0469             sbd3:
+0645   0469 1A              LD   A,(DE)              ; get icon position
+0646   046A 81              ADD  A,C                 ; add in column offset
+0647   046B C6 80           ADD  A,SET_CURSOR        ; make it a command
+0648   046D CD 21 05        CALL SendCommand         ; set icon position
+0649   0470 7E              LD   A,(HL)              ; get icon to display
+0650   0471 CD 29 05        CALL SendChar            ; display it
+0651   0474 13              INC  DE                  ; goto next position
+0652   0475 23              INC  HL                  ; goto next icon
+0653   0476 10 F1           DJNZ sbd3                ; loop for all 12 positions
+0654   0478 C9              RET 
+0655   0479             
+0656   0479             
+0657   0479             ;============================================================
+0658   0479             ;
+0659   0479             ;    CHARACTER ROUTINES
+0660   0479             ;
+0661   0479             
+0662   0479             RandomFill:    
+0663   0479 CD BA 04        CALL DoText              ; show some text first
+0664   047C 01 D0 07        LD   BC,2000
+0665   047F CD A1 05        CALL DELAY_BC
+0666   0482 21 09 0A        LD   HL,charMsg
+0667   0485 CD D9 05        CALL LabelIt             ; display "Char Test"
+0668   0488             rf0:               
+0669   0488 CD AD 05        CALL Random              ; get random position
+0670   048B F5              PUSH AF 
+0671   048C CB 3F           SRL  A                   ; /2 (0-127)
+0672   048E CB 3F           SRL  A                   ; /2 (0-63)
+0673   0490 CB 3F           SRL  A                   ; /2 (0-31)
+0674   0492 CB 3F           SRL  A                   ; /2 (0-15)
+0675   0494 C6 05           ADD  A,LMARGIN           ; add left margin
+0676   0496 FE 14           CP   20
+0677   0498 30 EE           JR   NC,rf0              ; limit column to 0-19
+0678   049A 47              LD   B,A                 ; save column in B 
+0679   049B F1              POP  AF 
+0680   049C E6 03           AND  $03                 ; row = b1/b0
+0681   049E CD 4D 05        CALL GotoRC              ; position the cursor     
+0682   04A1             rf1:
+0683   04A1 CD AD 05        CALL Random              ; get random character
+0684   04A4                 ;CP  $A0 
+0685   04A4                 ;JR  NC,rf3              ; $A0 and above OK to print
+0686   04A4 FE 80           CP  $80
+0687   04A6 30 F9           JR  NC,rf1               ; $80-$9F are nonprintable
+0688   04A8 FE 20           CP  $20
+0689   04AA 38 F5           JR  C,rf1                ; ignore chars below $20
+0690   04AC CD 29 05        CALL SendChar            ; and display it
+0691   04AF 01 19 00        LD   BC,25
+0692   04B2 CD A1 05        CALL DELAY_BC            ; 25mS dwell/character
+0693   04B5 CD 3E 01        CALL HandleUser          ; look for user break
+0694   04B8 18 CE           JR   rf0                 ; otherwise, loop forever
+0695   04BA             
+0696   04BA             
+0697   04BA             DoText:
+0698   04BA CD 31 05        CALL ClearScreen
+0699   04BD 21 0E 0A        LD   HL,textMsg
+0700   04C0 1E 00           LD   E,0
+0701   04C2             dt0:
+0702   04C2 7B              LD   A,E                 ; get character counter
+0703   04C3 06 0F           LD   B,15               
+0704   04C5 CD D0 05        CALL IntDiv  
+0705   04C8 C6 05           ADD  A,LMARGIN           ; col = count%15 + LMARGIN
+0706   04CA 47              LD   B,A            
+0707   04CB 79              LD   A,C                 ; row = count\15
+0708   04CC CD 4D 05        CALL GotoRC              ; set cursor position
+0709   04CF 01 3C 00        LD   BC,60
+0710   04D2 CD A1 05        CALL DELAY_BC            ; animation delay
+0711   04D5 7E              LD   A,(HL)              ; get next char in string
+0712   04D6 B7              OR   A                   ; set zero flag
+0713   04D7 C8              RET  Z                   ; stop on nul
+0714   04D8 CD 29 05        CALL SendChar            ; otherwise display it
+0715   04DB 23              INC  HL                  ; point to next char
+0716   04DC 1C              INC  E                   ; advance char counter
+0717   04DD 18 E3           JR   dt0                 ; loop
+0718   04DF             
+0719   04DF             
+0720   04DF             RandFill2:
+0721   04DF CD AD 05        CALL Random              ; get a random value
+0722   04E2 FE A0           CP  $A0 
+0723   04E4 30 08           JR  NC,rf2               ; $A0 and above OK to print
+0724   04E6 FE 80           CP  $80
+0725   04E8 30 F5           JR  NC,RandFill2         ; $80-$9F are nonprintable
+0726   04EA FE 20           CP  $20
+0727   04EC 38 F1           JR  C,RandFill2          ; $0-$20 are nonprintable
+0728   04EE             rf2:
+0729   04EE CD 62 05        CALL FillChar            ; fill screen with random char
+0730   04F1 01 20 03        LD   BC,800
+0731   04F4 CD A1 05        CALL DELAY_BC            ; dwell for a bit
+0732   04F7 CD 3E 01        CALL HandleUser          ; check for user input
+0733   04FA 18 E3           JR   RandFill2           ; infinite loop
+0734   04FC             
+0735   04FC             
+0736   04FC             ;=============================================================
+0737   04FC             ;
+0738   04FC             ;   CONSOLE ROUTINES
+0739   04FC             ;
+0740   04FC             
+0741   04FC             ; Print a null-terminated string to the console
+0742   04FC             ; Call with HL pointing to the string
+0743   04FC             ; Returns with HL pointing to the null-character
+0744   04FC             ;
+0745   04FC             PrintStr:
+0746   04FC 7E              LD   A,(HL)              ; load next character
+0747   04FD B7              OR   A                   ; is it nul?
+0748   04FE C8              RET  Z                   ; yes, done
+0749   04FF CD 12 05        CALL PrintCh             ; no, print the char
+0750   0502 23              INC  HL                  ; point to next char
+0751   0503 18 F7           JR   PrintStr            ; and loop until done
+0752   0505             
+0753   0505             ; Issue a carriage-return & line-feed to the console
+0754   0505             ;
+0755   0505             CRLF:
+0756   0505 F5              PUSH AF 
+0757   0506 3E 0D           LD   A,13                ; carriage return
+0758   0508 CD 12 05        CALL PrintCh             ; send it
+0759   050B 3E 0A           LD   A,10                ; line feed
+0760   050D CD 12 05        CALL PrintCh             ; send it
+0761   0510 F1              POP  AF 
+0762   0511 C9              RET 
+0763   0512             
+0764   0512             ; Print a character to the console using BDOS
+0765   0512             ; Call with A=character to print
+0766   0512             ;
+0767   0512             PrintCh:
+0768   0512 F5              PUSH AF
+0769   0513 C5              PUSH BC
+0770   0514 D5              PUSH DE
+0771   0515 E5              PUSH HL 
+0772   0516 5F              LD   E,A                 ; E = char to print
+0773   0517 0E 02           LD   C,2                 ; BDOS function #2
+0774   0519 CD 05 00        CALL 5                   ; Do it!
+0775   051C E1              POP  HL
+0776   051D D1              POP  DE
+0777   051E C1              POP  BC
+0778   051F F1              POP  AF 
+0779   0520 C9              RET 
+0780   0521             
+0781   0521             
+0782   0521             ;=============================================================
+0783   0521             ;
+0784   0521             ;   LCD ROUTINES
+0785   0521             ;
+0786   0521             
+0787   0521             ; Send a command to the HD44780 LCD controller
+0788   0521             ; Call with command in Reg A
+0789   0521             ;
+0790   0521             SendCommand:
+0791   0521 D3 DA           OUT (cmdPort),A          ; send the command
+0792   0523 DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0793   0525 07              RLCA                     ; move status bit to carry 
+0794   0526 38 FB           JR  C,$-3                ; wait until ready
+0795   0528 C9              RET
+0796   0529             
+0797   0529             
+0798   0529             ; Send a character to the LCD at the current cursor position
+0799   0529             ; Call with character in Reg A
+0800   0529             ;
+0801   0529             SendChar:
+0802   0529 D3 DB           OUT (dataPort),A         ; send a character to LCD
+0803   052B DB DA           IN A,(cmdPort)           ; check LCD status (bit 7 = busy)
+0804   052D 07              RLCA                     ; move status bit to carry 
+0805   052E 38 FB           JR  C,$-3                ; wait until ready
+0806   0530 C9              RET
+0807   0531             
+0808   0531             
+0809   0531             ; Clear the LCD screen
+0810   0531             ;
+0811   0531             ClearScreen:
+0812   0531 3E 01           LD   A,CLEAR_DISPLAY
+0813   0533 CD 21 05        CALL SendCommand
+0814   0536 C9              RET 
+0815   0537             
+0816   0537             
+0817   0537             ; Send a string to the LCD at the current cursor position
+0818   0537             ; Call with HL pointing to the null-terminated string
+0819   0537             ;
+0820   0537             SendString:
+0821   0537 7E          	LD	A,(HL)			     ; next character to send
+0822   0538 B7          	OR	A			         ; set flags
+0823   0539 C8          	RET	Z			         ; done on null
+0824   053A CD 29 05    	CALL SendChar            ; send the character
+0825   053D 23          	INC	HL			         ; point to next char
+0826   053E 18 F7       	JR	SendString    	     ; and loop until done
+0827   0540             
+0828   0540             
+0829   0540             ; Load a set of graphic icons into the HD44780 character 
+0830   0540             ; generator (CG) RAM.  Each icon is 8 bytes in length.
+0831   0540             ;
+0832   0540             ; Call with HL = address of first icon to load
+0833   0540             ;            B = number of bytes to load
+0834   0540             ;
+0835   0540             LoadIcons:
+0836   0540 3E 40           LD   A,LOAD_SYMBOL     
+0837   0542 CD 21 05        CALL SendCommand         ; send "set CGRAM address=0" cmd
+0838   0545             li0:
+0839   0545 7E              LD   A,(HL)              ; get icon data byte
+0840   0546 CD 29 05        Call SendChar            ; send it
+0841   0549 23              INC  HL                  ; point to next byte
+0842   054A 10 F9           DJNZ li0                 ; loop until all sent
+0843   054C C9              RET 
+0844   054D             
+0845   054D             
+0846   054D             ; Position the LCD cursor at (row,column). 
+0847   054D             ; Call with A=row (0-3) and B=column (0-19)
+0848   054D             ;
+0849   054D             GotoRC:
+0850   054D F5              PUSH AF
+0851   054E D5              PUSH DE 
+0852   054F E5              PUSH HL 
+0853   0550 21 90 09        LD   HL,LINEDAT          ; point to line offset table
+0854   0553 5F              LD   E,A               
+0855   0554 16 00           LD   D,0                 ; DE = row
+0856   0556 19              ADD  HL,DE               ; point to desired line offset
+0857   0557 7E              LD   A,(HL)              ; A now = addr of line start
+0858   0558 80              ADD  A,B                 ; add in column
+0859   0559 F6 80           OR   SET_CURSOR          ; add "set DDRAM address"  
+0860   055B CD 21 05        CALL SendCommand         ; send the command
+0861   055E E1              POP  HL 
+0862   055F D1              POP  DE
+0863   0560 F1              POP  AF
+0864   0561 C9              RET
+0865   0562             
+0866   0562             
+0867   0562             ; Fill the LCD screen with a single character
+0868   0562             ; Call with character in A
+0869   0562             ;
+0870   0562             FillChar:                    ; call with char to fill in A
+0871   0562 C5              PUSH BC
+0872   0563 4F              LD   C,A                 ; save char in C        
+0873   0564 3E 02           LD   A, CURSOR_HOME       
+0874   0566 CD 21 05        CALL SendCommand         ; home the cursor
+0875   0569 06 50           LD   B,80                ; count 80 characters
+0876   056B             fc0:           
+0877   056B 79              LD   A,C                 ; retrieve char
+0878   056C CD 29 05        CALL SendChar            ; send it to display
+0879   056F 10 FA           DJNZ fc0                 ; repeat until all sent
+0880   0571 C1              POP  BC
+0881   0572 C9              RET 
+0882   0573             
+0883   0573                 
+0884   0573             ;=============================================================
+0885   0573             ;
+0886   0573             ;   DELAY ROUTINES
+0887   0573             ;
+0888   0573             ;
+0889   0573             ; THESE ROUTINES ARE BASED ON A Z-80 CPU CLOCK OF 7.3728 MHz
+0890   0573             ; At that frequency, each T-state takes 0.1356 uS.
+0891   0573             ; 1 millisecond delay requires 7373 T-states.
+0892   0573             ;
+0893   0573             ; For an exact 1mS delay, the call should take 7373 T-states.
+0894   0573             ; The call itself takes 17T, leaving 7356T in the routine.
+0895   0573             ; Saving/restoring registers,loading BC and returning takes 62T,
+0896   0573             ; leaving 7294T for the delay loop.
+0897   0573             
+0898   0573             DELAY_MS:
+0899   0573             DELAY_1MS:
+0900   0573 F5              PUSH AF                 ; 11T
+0901   0574 C5              PUSH BC                 ; 11T
+0902   0575 01 30 01        LD  BC,304              ; 10T
+0903   0578             J01:                        ; Loop = 24*bc = 7296T
+0904   0578 0B              DEC BC                  ; 6T
+0905   0579 78              LD  A,B                 ; 4T
+0906   057A B1              OR  C                   ; 4T
+0907   057B C2 78 05        JP  NZ,J01              ; 10T 
+0908   057E C1              POP BC                  ; 10T
+0909   057F F1              POP AF                  ; 10T
+0910   0580 C9              RET                     ; 10T
+0911   0581             
+0912   0581             ; For an exact 10mS delay, the call should take 73,728 T-states.
+0913   0581             ; The call itself takes 17T, leaving 73,711T in the routine.
+0914   0581             ; Saving/restoring registers,loading BC and returning takes 62T,
+0915   0581             ; leaving 73,649T for the delay loop.  To achieve this, the loop
+0916   0581             ; uses 73,632T and 18T of padding is added at the end.
+0917   0581             ; 
+0918   0581             DELAY_10MS:                 ; 73,712T + 17(call) = 73,729T
+0919   0581 F5              PUSH AF                 ; 11T
+0920   0582 C5              PUSH BC                 ; 11T
+0921   0583 01 FC 0B        LD  BC,3068             ; 10T
+0922   0586             J02:                        ; Loop = 24*bc = 73,632T
+0923   0586 0B              DEC BC                  ; 6T
+0924   0587 78              LD  A,B                 ; 4T
+0925   0588 B1              OR  C                   ; 4T
+0926   0589 C2 86 05        JP  NZ,J02              ; 10T 
+0927   058C 03              INC BC                  ; pad 6T
+0928   058D 03              INC BC                  ; pad 6T
+0929   058E 03              INC BC                  ; pad 6T
+0930   058F C1              POP BC                  ; 10T
+0931   0590 F1              POP AF                  ; 10T
+0932   0591 C9              RET  
+0933   0592             
+0934   0592             
+0935   0592             ; DELAY_INNER:
+0936   0592             ; This is a helper routine for DELAY_BC.
+0937   0592             ;
+0938   0592             ; The desired length = 7348T, slightly shorter than 1mS
+0939   0592             ; The call itself takes 17T, leaving 7331T in the routine.
+0940   0592             ; Saving/restoring registers,loading BC and returning takes 41T,
+0941   0592             ; leaving 7290T for the delay loop.  This is done with
+0942   0592             ; 303 loops of 24T, plus 18T padding at the end.
+0943   0592             ; 
+0944   0592             DELAY_INNER:
+0945   0592 C5              PUSH BC                 ; 11T
+0946   0593 01 2F 01        LD  BC,303              ; 10T
+0947   0596             J03:                        ; Loop = 24*bc = 7272T
+0948   0596 0B              DEC BC                  ; 6T
+0949   0597 78              LD  A,B                 ; 4T
+0950   0598 B1              OR  C                   ; 4T
+0951   0599 C2 96 05        JP  NZ,J03              ; 10T 
+0952   059C 03              INC BC                  ; add +18T padding
+0953   059D 03              INC BC
+0954   059E 03              INC BC
+0955   059F C1              POP BC                  ; 10T
+0956   05A0 C9              RET                     ; 10T
+0957   05A1             
+0958   05A1             ; DELAY_BC is called with BC= desired delay in milliseconds
+0959   05A1             ; when finished, BC=0.
+0960   05A1             ;
+0961   05A1             ; Actual Time Delay, in T-states:
+0962   05A1             ; loading BC & calling DELAY_BC:  27T
+0963   05A1             ; DELAY_BC itself:  7372*BC + 31T
+0964   05A1             ; TOTAL = 7372*BC + 58
+0965   05A1             ; For example, 1 second: 7372*1000 + 58 = 7,372,058T (999.9mS)
+0966   05A1             ; 
+0967   05A1             DELAY_BC:
+0968   05A1 F5              PUSH AF                 ; 11T
+0969   05A2             J04:                        ; bc * 7372T
+0970   05A2 CD 92 05        CALL DELAY_INNER        ; 7348T
+0971   05A5 0B              DEC BC                  ; 6T
+0972   05A6 78              LD  A,B                 ; 4T
+0973   05A7 B1              OR  C                   ; 4T
+0974   05A8 C2 A2 05        JP  NZ,J04              ; 10T 
+0975   05AB F1              POP AF                  ; 10T
+0976   05AC C9              RET                     ; 10T 
+0977   05AD             
+0978   05AD             
+0979   05AD             ;=============================================================
+0980   05AD             ;
+0981   05AD             ;   MISC ROUTINES
+0982   05AD             ;
+0983   05AD             
+0984   05AD             ; XOR-SHIFT random number generator
+0985   05AD             ; returns reg A = 8-bit result
+0986   05AD             Random: 
+0987   05AD E5              PUSH HL
+0988   05AE D5              PUSH DE
+0989   05AF 21 80 A2        LD   HL,$A280
+0990   05B2 11 DE C0        LD   DE,$C0DE
+0991   05B5 7C              LD   a,h         
+0992   05B6 87              add  a,a
+0993   05B7 AC              xor  h
+0994   05B8 65              LD   h,l        
+0995   05B9 6A              LD   l,d        
+0996   05BA 53              LD   d,e        
+0997   05BB 5F              LD   e,a
+0998   05BC 1F              rra            
+0999   05BD AB              xor  e
+1000   05BE 5F              LD   e,a
+1001   05BF 7A              LD   a,d        
+1002   05C0 87              add  a,a
+1003   05C1 87              add  a,a
+1004   05C2 87              add  a,a
+1005   05C3 AA              xor  d
+1006   05C4 AB              xor  e
+1007   05C5 5F              LD   e,a
+1008   05C6 22 B0 05        LD   (Random+3),HL
+1009   05C9 ED 53 B3 05     LD   (Random+6),DE
+1010   05CD D1              POP  DE
+1011   05CE E1              POP  HL 
+1012   05CF C9              RET
+1013   05D0             
+1014   05D0             
+1015   05D0             ; INTEGER DIVISION: A/B
+1016   05D0             ;   return A= A mod B
+1017   05D0             ;   return C= A div B
+1018   05D0             ;
+1019   05D0             IntDiv:
+1020   05D0 0E 00           LD   C,0
+1021   05D2             id1:
+1022   05D2 0C              INC  C
+1023   05D3 90              SUB  B
+1024   05D4 30 FC           JR   NC,id1
+1025   05D6 0D              DEC  C 
+1026   05D7 80              ADD  A,B
+1027   05D8 C9              RET  
+1028   05D9             
+1029   05D9             
+1030   05D9             ; Print "<msg> DEMO"
+1031   05D9             ; Call with HL = address of 4-character message
+1032   05D9             ;
+1033   05D9             LabelIt:
+1034   05D9 CD 31 05        CALL ClearScreen         ; clear the display
+1035   05DC 3E 01           LD   A,1
+1036   05DE 06 00           LD   B,0
+1037   05E0 CD 4D 05        CALL GotoRC              ; goto row1,col0          
+1038   05E3 CD 37 05        CALL SendString          ; print 1st msg
+1039   05E6 3E 02           LD   A,2
+1040   05E8 06 00           LD   B,0
+1041   05EA CD 4D 05        CALL GotoRC              ; goto row2,col0
+1042   05ED 21 FA 09        LD   HL,testMsg
+1043   05F0 CD 37 05        CALL SendString          ; print 2nd msg
+1044   05F3 C9              RET 
+1045   05F4             
+1046   05F4             ; call with HL pointing to name of the demo
+1047   05F4             ;
+1048   05F4             LabelDemo:
+1049   05F4 CD 31 05        CALL ClearScreen;
+1050   05F7 3E 02           LD   A,2
+1051   05F9 06 00           LD   B,0
+1052   05FB CD 4D 05        CALL GotoRC              ; goto row1,col0          
+1053   05FE CD 37 05        CALL SendString          ; print 1st msg
+1054   0601 3E 00           LD   A,0
+1055   0603 06 00           LD   B,0
+1056   0605 CD 4D 05        CALL GotoRC              ; goto row2,col0
+1057   0608 21 94 09        LD   HL,msg0
+1058   060B CD 37 05        CALL SendString          ; print 2nd msg
+1059   060E C9              RET    
+1060   060F             
+1061   060F             ; Looks for keyboard input
+1062   060F             ; Returns zero flag set if no input
+1063   060F             ; Returns A=0 to 15 for hex input
+1064   060F             ; Closes app on non-hex input
+1065   060F             ;
+1066   060F             CheckKeypress
+1067   060F C5              PUSH BC
+1068   0610 D5              PUSH DE 
+1069   0611 E5              PUSH HL
+1070   0612 0E 80           LD   C,$80               ; for current console.
+1071   0614 06 02           LD   B,$02               ; check char input buffer
+1072   0616 CF              RST  08                  ; call the HBIOS routine
+1073   0617 E1              POP  HL
+1074   0618 D1              POP  DE
+1075   0619 C1              POP  BC 
+1076   061A C8              RET  Z                   ; nothing waiting, so return
+1077   061B 0E 80           LD   C,$80               ; for current console.
+1078   061D 06 00           LD   B,0                 ; get waiting character
+1079   061F CF              RST  08                  ; call the HBIOS routine
+1080   0620 7B              LD   A,E                 ; A = received character
+1081   0621 CD 36 06        CALL HexToBin            ; try to convert it to binary
+1082   0624 FE FF           CP   $FF                 ; was it hex input?
+1083   0626 C0              RET  NZ                  ; yes, return with it
+1084   0627 AF              XOR  A                   ; no it wasn't; shut down
+1085   0628 D3 00           OUT  (0),A               ; turn off the lights!
+1086   062A CD 31 05        CALL ClearScreen         ; clear the screen
+1087   062D 21 94 09        LD   HL,msg0
+1088   0630 CD 37 05        CALL SendString          ; Restore ownership string
+1089   0633 C3 00 00        JP   0                   ; & return to CP/M
+1090   0636             
+1091   0636             
+1092   0636             HexToBin:
+1093   0636 FE 30           CP   '0'                 ; Compare with '0'
+1094   0638 38 1F           JR   C,invalid           ; If less, invalid
+1095   063A FE 3A           CP   '9'+1
+1096   063C 38 12           JR   C,digit             ; If <= '9', it's a decimal digit
+1097   063E FE 41           CP   'A'                 ; Compare with 'A'
+1098   0640 38 17           JR   C,invalid           ; If less, invalid
+1099   0642 FE 47           CP   'F'+1
+1100   0644 38 0D           JR   C,ucAlpha           ; If <= 'F', uppercase alpha
+1101   0646 FE 61           CP   'a'                 ; Compare with 'a'
+1102   0648 38 0F           JR   C,invalid           ; If less, invalid
+1103   064A FE 67           CP   'f'+1
+1104   064C 38 08           JR   C,lcAlpha           ; If <= 'f', lowercase alpha
+1105   064E 18 09           JR   invalid             ; Anything else is invalid
+1106   0650             digit:                       ; convert digits '0'–'9
+1107   0650 D6 30           SUB  '0'                 ; Subtract ASCII '0'
+1108   0652 C9              RET
+1109   0653             ucAlpha:                     ;  convert uppercase 'A'–'F'
+1110   0653 D6 37           SUB  'A'-10              ; 'A' → 10
+1111   0655 C9              RET 
+1112   0656             lcAlpha:                     ;  convert Lowercase 'a'–'f'
+1113   0656 D6 57           SUB  'a'-10              ; 'a' → 10
+1114   0658 C9              RET
+1115   0659             invalid:
+1116   0659 3E FF           LD   A, $FF              ; set A to 0xFF for error code
+1117   065B C9              RET 
+1118   065C             
+1119   065C             
+1120   065C             ;=============================================================
+1121   065C             ;
+1122   065C             ;   PROGRAM CONSTANTS
+1123   065C             ;
+1124   065C             
+1125   065C             vectTable:
+1126   065C 0F 01           .DW SwitchDemo          ; 0
+1127   065E 79 04           .DW RandomFill          ; 1
+1128   0660 C2 01           .DW DoBattery           ; 2
+1129   0662 3C 03           .DW Clock1              ; 3
+1130   0664 51 03           .DW Clock2              ; 4
+1131   0666 EE 01           .DW DoWave              ; 5
+1132   0668 D2 02           .DW DoVBar              ; 6
+1133   066A 6A 02           .DW DoHBar              ; 7
+1134   066C 59 01           .DW BlinkDemo           ; 8
+1135   066E 99 01           .DW CylonDemo           ; 9
+1136   0670 6F 01           .DW IncDemo             ; A
+1137   0672 84 01           .DW DecDemo             ; B
+1138   0674 00 00           .DW 0                   ; C
+1139   0676 00 00           .DW 0                   ; D
+1140   0678 00 00           .DW 0                   ; E
+1141   067A 00 00           .DW 0                   ; F
+1142   067C             
+1143   067C 1E 12 12 12 SWITCH0   .DB $1E,$12,$12,$12,$12,$1E,$1E,$1E 
+1143   0680 12 1E 1E 1E 
+1144   0684 1E 1E 1E 1E SWITCH1   .DB $1E,$1E,$1E,$1E,$12,$12,$12,$1E 
+1144   0688 12 12 12 1E 
+1145   068C 1F 1F 1F 1F SWITCH2   .DB $1F,$1F,$1F,$1F,$11,$11,$11,$1F 
+1145   0690 11 11 11 1F 
+1146   0694 1F 11 11 11 SWITCH3   .DB $1F,$11,$11,$11,$1F,$1F,$1F,$1F
+1146   0698 1F 1F 1F 1F 
+1147   069C 00 0A 1F 1F HEART     .DB $00,$0A,$1F,$1F,$1F,$0E,$04,$00
+1147   06A0 1F 0E 04 00 
+1148   06A4 04 0E 0E 0E BELL      .DB $04,$0e,$0e,$0e,$1f,$00,$04,$00
+1148   06A8 1F 00 04 00 
+1149   06AC 02 03 02 0E NOTE      .DB $02,$03,$02,$0e,$1e,$0c,$00,$00
+1149   06B0 1E 0C 00 00 
+1150   06B4 00 0E 15 17 CLOCKFACE .DB $00,$0e,$15,$17,$11,$0e,$00,$00
+1150   06B8 11 0E 00 00 
+1151   06BC 00 0A 1F 1F HEART2    .DB $00,$0a,$1f,$1f,$0e,$04,$00,$00
+1151   06C0 0E 04 00 00 
+1152   06C4 00 0A 15 11 OPENHEART .DB $00,$0a,$15,$11,$0a,$04,$00,$00
+1152   06C8 0A 04 00 00 
+1153   06CC 00 0C 1D 0F DUCK      .DB $00,$0c,$1d,$0f,$0f,$06,$00,$00
+1153   06D0 0F 06 00 00 
+1154   06D4 00 01 03 16 CHECK     .DB $00,$01,$03,$16,$1c,$08,$00,$00
+1154   06D8 1C 08 00 00 
+1155   06DC 00 1B 0E 04 CROSS     .DB $00,$1b,$0e,$04,$0e,$1b,$00,$00
+1155   06E0 0E 1B 00 00 
+1156   06E4 00 0A 0A 00 SMILE     .DB $00,$0a,$0a,$00,$00,$11,$0e,$00
+1156   06E8 00 11 0E 00 
+1157   06EC 00 00 0A 00 FROWN:    .DB $00,$00,$0a,$00,$0e,$11,$00,$00
+1157   06F0 0E 11 00 00 
+1158   06F4 04 0E 1F 0E UPARROW   .DB $04,$0e,$1f,$0e,$0e,$0e,$00,$00
+1158   06F8 0E 0E 00 00 
+1159   06FC 00 0F 03 05 RUPARROW  .DB $00,$0f,$03,$05,$09,$10,$00,$00
+1159   0700 09 10 00 00 
+1160   0704 00 1E 18 14 LUPARROW  .DB $00,$1e,$18,$14,$12,$01,$00,$00
+1160   0708 12 01 00 00 
+1161   070C 00 0E 0E 0E DNARROW   .DB $00,$0e,$0e,$0e,$1f,$0e,$04,$00
+1161   0710 1F 0E 04 00 
+1162   0714 00 10 09 05 RDNARROW  .DB $00,$10,$09,$05,$03,$0f,$00,$00
+1162   0718 03 0F 00 00 
+1163   071C 00 01 12 14 LDNARROW  .DB $00,$01,$12,$14,$18,$1e,$00,$00
+1163   0720 18 1E 00 00 
+1164   0724 01 01 05 09 RETARROW  .DB $01,$01,$05,$09,$1f,$08,$04,$00
+1164   0728 1F 08 04 00 
+1165   072C 1E 01 05 09 RETURN    .DB $1E,$01,$05,$09,$1E,$08,$04,$00
+1165   0730 1E 08 04 00 
+1166   0734 1F 11 0A 04 HOURGLASS .DB $1f,$11,$0a,$04,$0a,$11,$1f,$00
+1166   0738 0A 11 1F 00 
+1167   073C 06 09 09 06 DEGREE    .DB $06,$09,$09,$06,$00,$00,$00,$00
+1167   0740 00 00 00 00 
+1168   0744 18 18 03 04 DEGREEC   .DB $18,$18,$03,$04,$04,$04,$03,$00
+1168   0748 04 04 03 00 
+1169   074C 18 18 07 04 DEGREEF   .DB $18,$18,$07,$04,$07,$04,$04,$00
+1169   0750 07 04 04 00 
+1170   0754 00 00 00 00 VBAR0     .DB $00,$00,$00,$00,$00,$00,$00,$00
+1170   0758 00 00 00 00 
+1171   075C 00 00 00 00 VBAR1     .DB $00,$00,$00,$00,$00,$00,$00,$1F
+1171   0760 00 00 00 1F 
+1172   0764 00 00 00 00 VBAR2     .DB $00,$00,$00,$00,$00,$00,$1F,$1F
+1172   0768 00 00 1F 1F 
+1173   076C 00 00 00 00 VBAR3     .DB $00,$00,$00,$00,$00,$1F,$1F,$1F
+1173   0770 00 1F 1F 1F 
+1174   0774 00 00 00 00 VBAR4     .DB $00,$00,$00,$00,$1F,$1F,$1F,$1F
+1174   0778 1F 1F 1F 1F 
+1175   077C 00 00 00 1F VBAR5     .DB $00,$00,$00,$1F,$1F,$1F,$1F,$1F
+1175   0780 1F 1F 1F 1F 
+1176   0784 00 00 1F 1F VBAR6     .DB $00,$00,$1F,$1F,$1F,$1F,$1F,$1F
+1176   0788 1F 1F 1F 1F 
+1177   078C 00 1F 1F 1F VBAR7     .DB $00,$1F,$1F,$1F,$1F,$1F,$1F,$1F
+1177   0790 1F 1F 1F 1F 
+1178   0794 00 00 00 00 HBAR0     .DB $00,$00,$00,$00,$00,$00,$00,$00
+1178   0798 00 00 00 00 
+1179   079C 10 10 10 10 HBAR1     .DB $10,$10,$10,$10,$10,$10,$10,$10
+1179   07A0 10 10 10 10 
+1180   07A4 18 18 18 18 HBAR2     .DB $18,$18,$18,$18,$18,$18,$18,$18
+1180   07A8 18 18 18 18 
+1181   07AC 1C 1C 1C 1C HBAR3     .DB $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
+1181   07B0 1C 1C 1C 1C 
+1182   07B4 1E 1E 1E 1E HBAR4     .DB $1E,$1E,$1E,$1E,$1E,$1E,$1E,$1E
+1182   07B8 1E 1E 1E 1E 
+1183   07BC 1F 1F 1F 1F HBAR5     .DB $1F,$1F,$1F,$1F,$1F,$1F,$1F,$1F
+1183   07C0 1F 1F 1F 1F 
+1184   07C4 00 0E 11 11 DOT0      .DB $00,$0e,$11,$11,$11,$0e,$00,$00
+1184   07C8 11 0E 00 00 
+1185   07CC 00 0E 11 15 DOT1      .DB $00,$0e,$11,$15,$11,$0e,$00,$00
+1185   07D0 11 0E 00 00 
+1186   07D4 00 0E 1F 1B DOT2      .DB $00,$0e,$1f,$1b,$1f,$0e,$00,$00
+1186   07D8 1F 0E 00 00 
+1187   07DC 00 0E 1F 1F DOT3      .DB $00,$0E,$1f,$1f,$1f,$0e,$00,$00
+1187   07E0 1F 0E 00 00 
+1188   07E4 00 1F 11 11 DOT4      .DB $00,$1f,$11,$11,$11,$1f,$00,$00
+1188   07E8 11 1F 00 00 
+1189   07EC 00 1F 11 15 DOT5      .DB $00,$1f,$11,$15,$11,$1f,$00,$00
+1189   07F0 11 1F 00 00 
+1190   07F4 00 1F 1F 1F DOT6      .DB $00,$1f,$1f,$1f,$1f,$1f,$00,$00
+1190   07F8 1F 1F 00 00 
+1191   07FC 00 00 0E 0A DOT7      .DB $00,$00,$0e,$0a,$0e,$00,$00,$00
+1191   0800 0E 00 00 00 
+1192   0804 00 00 0E 0E DOT8      .DB $00,$00,$0e,$0e,$0e,$00,$00,$00
+1192   0808 0E 00 00 00 
+1193   080C 0E 1B 1B 1B BOLD0     .DB $0e,$1b,$1b,$1b,$1b,$1b,$0e,$00
+1193   0810 1B 1B 0E 00 
+1194   0814 02 06 0E 06 BOLD1     .DB $02,$06,$0e,$06,$06,$06,$06,$00
+1194   0818 06 06 06 00 
+1195   081C 0E 1B 03 06 BOLD2     .DB $0e,$1b,$03,$06,$0c,$18,$1f,$00
+1195   0820 0C 18 1F 00 
+1196   0824 0E 1B 03 0E BOLD3     .DB $0e,$1b,$03,$0e,$03,$1b,$0e,$00
+1196   0828 03 1B 0E 00 
+1197   082C 03 07 0F 1B BOLD4     .DB $03,$07,$0f,$1b,$1f,$03,$03,$00
+1197   0830 1F 03 03 00 
+1198   0834 1F 18 1E 03 BOLD5     .DB $1f,$18,$1e,$03,$03,$1b,$0e,$00
+1198   0838 03 1B 0E 00 
+1199   083C 0E 1B 18 1E BOLD6     .DB $0e,$1b,$18,$1e,$1b,$1b,$0e,$00
+1199   0840 1B 1B 0E 00 
+1200   0844 1F 03 06 0C BOLD7     .DB $1f,$03,$06,$0c,$0c,$0c,$0c,$00
+1200   0848 0C 0C 0C 00 
+1201   084C 0E 1B 1B 0E BOLD8     .DB $0e,$1b,$1b,$0e,$1b,$1b,$0e,$00
+1201   0850 1B 1B 0E 00 
+1202   0854 0E 1B 1B 0F BOLD9     .DB $0e,$1b,$1b,$0f,$03,$1b,$0e,$00
+1202   0858 03 1B 0E 00 
+1203   085C 0E 1B 1B 1F BOLDA     .DB $0e,$1b,$1b,$1f,$1b,$1b,$1b,$00
+1203   0860 1B 1B 1B 00 
+1204   0864 1E 1B 1B 1E BOLDB     .DB $1e,$1b,$1b,$1e,$1b,$1b,$1e,$00
+1204   0868 1B 1B 1E 00 
+1205   086C 0E 1B 18 18 BOLDC     .DB $0e,$1b,$18,$18,$18,$1b,$0e,$00
+1205   0870 18 1B 0E 00 
+1206   0874 1E 1B 1B 1B BOLDD     .DB $1e,$1b,$1b,$1b,$1b,$1b,$1e,$00
+1206   0878 1B 1B 1E 00 
+1207   087C 1F 18 18 1E BOLDE     .DB $1f,$18,$18,$1e,$18,$18,$1f,$00
+1207   0880 18 18 1F 00 
+1208   0884 1F 18 18 1E BOLDF     .DB $1f,$18,$18,$1e,$18,$18,$18,$00
+1208   0888 18 18 18 00 
+1209   088C 0E 1B 18 1B BOLDG     .DB $0e,$1b,$18,$1b,$1b,$19,$0f,$00
+1209   0890 1B 19 0F 00 
+1210   0894 1B 1B 1B 1F BOLDH     .DB $1b,$1b,$1b,$1f,$1b,$1b,$1b,$00
+1210   0898 1B 1B 1B 00 
+1211   089C 0E 1B 11 11 BATT0     .DB $0E,$1B,$11,$11,$11,$11,$11,$1F
+1211   08A0 11 11 11 1F 
+1212   08A4 0E 1B 11 11 BATT20    .DB $0E,$1B,$11,$11,$11,$11,$1F,$1F 
+1212   08A8 11 11 1F 1F 
+1213   08AC 0E 1B 11 11 BATT40    .DB $0E,$1B,$11,$11,$11,$1F,$1F,$1F 
+1213   08B0 11 1F 1F 1F 
+1214   08B4 0E 1B 11 11 BATT60    .DB $0E,$1B,$11,$11,$1F,$1F,$1F,$1F 
+1214   08B8 1F 1F 1F 1F 
+1215   08BC 0E 1B 11 1F BATT80    .DB $0E,$1B,$11,$1F,$1F,$1F,$1F,$1F 
+1215   08C0 1F 1F 1F 1F 
+1216   08C4 0E 1F 1F 1F BATT100   .DB $0E,$1F,$1F,$1F,$1F,$1F,$1F,$1F 
+1216   08C8 1F 1F 1F 1F 
+1217   08CC 01 03 03 07 BDIGIT0   .DB $01,$03,$03,$07,$07,$0F,$0F,$1F  ; lower-rt triangle 
+1217   08D0 07 0F 0F 1F 
+1218   08D4 10 18 18 1C BDIGIT1   .DB $10,$18,$18,$1C,$1C,$1E,$1E,$1F  ; lower-lf triangle 
+1218   08D8 1C 1E 1E 1F 
+1219   08DC 1F 0F 0F 07 BDIGIT2   .DB $1F,$0F,$0F,$07,$07,$03,$03,$01  ; upper-rt triangle 
+1219   08E0 07 03 03 01 
+1220   08E4 1F 1E 1E 1C BDIGIT3   .DB $1F,$1E,$1E,$1C,$1C,$18,$18,$10  ; upper-lf triangle 
+1220   08E8 1C 18 18 10 
+1221   08EC 00 00 00 00 BDIGIT4   .DB $00,$00,$00,$00,$1F,$1F,$1F,$1F  ; lower horiz bar 
+1221   08F0 1F 1F 1F 1F 
+1222   08F4 1F 1F 1F 1F BDIGIT5   .DB $1F,$1F,$1F,$1F,$00,$00,$00,$00  ; upper horiz bar 
+1222   08F8 00 00 00 00 
+1223   08FC 00 0E 11 11 BDIGIT6   .DB $00,$0e,$11,$11,$11,$0e,$00,$00  ; open dot (same as DOT0)
+1223   0900 11 0E 00 00 
+1224   0904 00 0E 1F 1F BDIGIT7   .DB $00,$0E,$1f,$1f,$1f,$0e,$00,$00  ; closed dot (same as DOT3)
+1224   0908 1F 0E 00 00 
+1225   090C             
+1226   090C             bigDigits
+1227   090C 00 FF 01 FF           .DB $00,$FF,$01,$FF,$20,$FF,$FF,$20,$FF,$02,$FF,$03   ; #0 
+1227   0910 20 FF FF 20 
+1227   0914 FF 02 FF 03 
+1228   0918 00 FF 20 20           .DB $00,$FF,$20,$20,$FF,$20,$20,$FF,$20,$20,$FF,$20   ; #1 
+1228   091C FF 20 20 FF 
+1228   0920 20 20 FF 20 
+1229   0924 00 FF 01 20           .DB $00,$FF,$01,$20,$00,$03,$00,$03,$20,$FF,$FF,$FF   ; #2 
+1229   0928 00 03 00 03 
+1229   092C 20 FF FF FF 
+1230   0930 00 FF 01 20           .DB $00,$FF,$01,$20,$20,$FF,$20,$05,$FF,$02,$FF,$03   ; #3 
+1230   0934 20 FF 20 05 
+1230   0938 FF 02 FF 03 
+1231   093C FF 20 FF FF           .DB $FF,$20,$FF,$FF,$FF,$FF,$20,$20,$FF,$20,$20,$FF   ; #4 
+1231   0940 FF FF 20 20 
+1231   0944 FF 20 20 FF 
+1232   0948 FF FF FF FF           .DB $FF,$FF,$FF,$FF,$04,$04,$20,$20,$FF,$FF,$FF,$03   ; #5 
+1232   094C 04 04 20 20 
+1232   0950 FF FF FF 03 
+1233   0954 00 FF 01 FF           .DB $00,$FF,$01,$FF,$20,$20,$FF,$05,$01,$02,$FF,$03   ; #6 
+1233   0958 20 20 FF 05 
+1233   095C 01 02 FF 03 
+1234   0960 FF FF FF 20           .DB $FF,$FF,$FF,$20,$20,$FF,$20,$20,$FF,$20,$20,$FF   ; #7 
+1234   0964 20 FF 20 20 
+1234   0968 FF 20 20 FF 
+1235   096C 00 FF 01 FF           .DB $00,$FF,$01,$FF,$20,$FF,$FF,$05,$FF,$02,$FF,$03   ; #8 
+1235   0970 20 FF FF 05 
+1235   0974 FF 02 FF 03 
+1236   0978 00 FF 01 02           .DB $00,$FF,$01,$02,$04,$FF,$20,$20,$FF,$20,$20,$FF   ; #9 
+1236   097C 04 FF 20 20 
+1236   0980 FF 20 20 FF 
+1237   0984             
+1238   0984 00 01 02 40 digitXY   .DB $00,$01,$02,$40,$41,$42,$14,$15,$16,$54,$55,$56
+1238   0988 41 42 14 15 
+1238   098C 16 54 55 56 
+1239   0990 00 40 14 54 LINEDAT   .DB $00,$40,$14,$54
+1240   0994             
+1241   0994 52 43 32 30 msg0      .DB "RC2014 Z80 Computer",0
+1241   0998 31 34 20 5A 
+1241   099C 38 30 20 43 
+1241   09A0 6F 6D 70 75 
+1241   09A4 74 65 72 00 
+1242   09A8 53 77 69 74 switchMsg .DB "Switches",0
+1242   09AC 63 68 65 73 
+1242   09B0 00 
+1243   09B1 42 69 6E 61 binUpMsg  .DB "Binary Count Up",0
+1243   09B5 72 79 20 43 
+1243   09B9 6F 75 6E 74 
+1243   09BD 20 55 70 00 
+1244   09C1 42 69 6E 61 binDnMsg  .DB "Binary Count Down",0
+1244   09C5 72 79 20 43 
+1244   09C9 6F 75 6E 74 
+1244   09CD 20 44 6F 77 
+1244   09D1 6E 00 
+1245   09D3 42 6C 69 6E blinkMsg  .DB "Blinkenlights",0
+1245   09D7 6B 65 6E 6C 
+1245   09DB 69 67 68 74 
+1245   09DF 73 00 
+1246   09E1 4C 61 72 73 cylonMsg  .DB "Larson Scanner",0
+1246   09E5 6F 6E 20 53 
+1246   09E9 63 61 6E 6E 
+1246   09ED 65 72 00 
+1247   09F0 49 63 6F 6E iconMsg   .DB "Icon",0
+1247   09F4 00 
+1248   09F5 53 69 6E 65 signMsg   .DB "Sine",0
+1248   09F9 00 
+1249   09FA 44 65 6D 6F testMsg   .DB "Demo",0
+1249   09FE 00 
+1250   09FF 56 42 61 72 vbarMsg   .DB "VBar",0
+1250   0A03 00 
+1251   0A04 48 42 61 72 hbarMsg   .DB "HBar",0
+1251   0A08 00 
+1252   0A09 43 68 61 72 charMsg   .DB "Char",0
+1252   0A0D 00 
+1253   0A0E 54 68 69 73 textMsg   .DB "This computer  is a Z80-based RC2014 system  running CP/M.",0
+1253   0A12 20 63 6F 6D 
+1253   0A16 70 75 74 65 
+1253   0A1A 72 20 20 69 
+1253   0A1E 73 20 61 20 
+1253   0A22 5A 38 30 2D 
+1253   0A26 62 61 73 65 
+1253   0A2A 64 20 52 43 
+1253   0A2E 32 30 31 34 
+1253   0A32 20 73 79 73 
+1253   0A36 74 65 6D 20 
+1253   0A3A 20 72 75 6E 
+1253   0A3E 6E 69 6E 67 
+1253   0A42 20 43 50 2F 
+1253   0A46 4D 2E 00 
+1254   0A49 00 20 46 50 introMsg  .DB 0," FPDEMO by Bruce Hall, W8BH",0,0
+1254   0A4D 44 45 4D 4F 
+1254   0A51 20 62 79 20 
+1254   0A55 42 72 75 63 
+1254   0A59 65 20 48 61 
+1254   0A5D 6C 6C 2C 20 
+1254   0A61 57 38 42 48 
+1254   0A65 00 00 
+1255   0A67 20 45 78 65           .DB " Exercise the RC2014 front panel hardware.",0
+1255   0A6B 72 63 69 73 
+1255   0A6F 65 20 74 68 
+1255   0A73 65 20 52 43 
+1255   0A77 32 30 31 34 
+1255   0A7B 20 66 72 6F 
+1255   0A7F 6E 74 20 70 
+1255   0A83 61 6E 65 6C 
+1255   0A87 20 68 61 72 
+1255   0A8B 64 77 61 72 
+1255   0A8F 65 2E 00 
+1256   0A92 20 43 68 6F           .DB " Choose a demonstration by pressing a key.",0,0
+1256   0A96 6F 73 65 20 
+1256   0A9A 61 20 64 65 
+1256   0A9E 6D 6F 6E 73 
+1256   0AA2 74 72 61 74 
+1256   0AA6 69 6F 6E 20 
+1256   0AAA 62 79 20 70 
+1256   0AAE 72 65 73 73 
+1256   0AB2 69 6E 67 20 
+1256   0AB6 61 20 6B 65 
+1256   0ABA 79 2E 00 00 
+1257   0ABE 20 4B 65 79           .DB " Keypress   Demo",0
+1257   0AC2 70 72 65 73 
+1257   0AC6 73 20 20 20 
+1257   0ACA 44 65 6D 6F 
+1257   0ACE 00 
+1258   0ACF 20 20 20 20           .DB "    0       Switch positions shown on LEDs and LCD",0
+1258   0AD3 30 20 20 20 
+1258   0AD7 20 20 20 20 
+1258   0ADB 53 77 69 74 
+1258   0ADF 63 68 20 70 
+1258   0AE3 6F 73 69 74 
+1258   0AE7 69 6F 6E 73 
+1258   0AEB 20 73 68 6F 
+1258   0AEF 77 6E 20 6F 
+1258   0AF3 6E 20 4C 45 
+1258   0AF7 44 73 20 61 
+1258   0AFB 6E 64 20 4C 
+1258   0AFF 43 44 00 
+1259   0B02 20 20 20 20           .DB "    1       Multi-line text & random characters",0
+1259   0B06 31 20 20 20 
+1259   0B0A 20 20 20 20 
+1259   0B0E 4D 75 6C 74 
+1259   0B12 69 2D 6C 69 
+1259   0B16 6E 65 20 74 
+1259   0B1A 65 78 74 20 
+1259   0B1E 26 20 72 61 
+1259   0B22 6E 64 6F 6D 
+1259   0B26 20 63 68 61 
+1259   0B2A 72 61 63 74 
+1259   0B2E 65 72 73 00 
+1260   0B32 20 20 20 20           .DB "    2       Animated battery icon",0
+1260   0B36 32 20 20 20 
+1260   0B3A 20 20 20 20 
+1260   0B3E 41 6E 69 6D 
+1260   0B42 61 74 65 64 
+1260   0B46 20 62 61 74 
+1260   0B4A 74 65 72 79 
+1260   0B4E 20 69 63 6F 
+1260   0B52 6E 00 
+1261   0B54 20 20 20 20           .DB "    3       Large 4-digit clock",0
+1261   0B58 33 20 20 20 
+1261   0B5C 20 20 20 20 
+1261   0B60 4C 61 72 67 
+1261   0B64 65 20 34 2D 
+1261   0B68 64 69 67 69 
+1261   0B6C 74 20 63 6C 
+1261   0B70 6F 63 6B 00 
+1262   0B74 20 20 20 20           .DB "    4       Large 6-digit clock",0
+1262   0B78 34 20 20 20 
+1262   0B7C 20 20 20 20 
+1262   0B80 4C 61 72 67 
+1262   0B84 65 20 36 2D 
+1262   0B88 64 69 67 69 
+1262   0B8C 74 20 63 6C 
+1262   0B90 6F 63 6B 00 
+1263   0B94 20 20 20 20           .DB "    5       Animated sine wave",0
+1263   0B98 35 20 20 20 
+1263   0B9C 20 20 20 20 
+1263   0BA0 41 6E 69 6D 
+1263   0BA4 61 74 65 64 
+1263   0BA8 20 73 69 6E 
+1263   0BAC 65 20 77 61 
+1263   0BB0 76 65 00 
+1264   0BB3 20 20 20 20           .DB "    6       Animated vertical bar graph",0
+1264   0BB7 36 20 20 20 
+1264   0BBB 20 20 20 20 
+1264   0BBF 41 6E 69 6D 
+1264   0BC3 61 74 65 64 
+1264   0BC7 20 76 65 72 
+1264   0BCB 74 69 63 61 
+1264   0BCF 6C 20 62 61 
+1264   0BD3 72 20 67 72 
+1264   0BD7 61 70 68 00 
+1265   0BDB 20 20 20 20           .DB "    7       Animated horizontal bar graph",0
+1265   0BDF 37 20 20 20 
+1265   0BE3 20 20 20 20 
+1265   0BE7 41 6E 69 6D 
+1265   0BEB 61 74 65 64 
+1265   0BEF 20 68 6F 72 
+1265   0BF3 69 7A 6F 6E 
+1265   0BF7 74 61 6C 20 
+1265   0BFB 62 61 72 20 
+1265   0BFF 67 72 61 70 
+1265   0C03 68 00 
+1266   0C05 20 20 20 20           .DB "    8       Blinkenlights",0
+1266   0C09 38 20 20 20 
+1266   0C0D 20 20 20 20 
+1266   0C11 42 6C 69 6E 
+1266   0C15 6B 65 6E 6C 
+1266   0C19 69 67 68 74 
+1266   0C1D 73 00 
+1267   0C1F 20 20 20 20           .DB "    9       Larson Scanner",0
+1267   0C23 39 20 20 20 
+1267   0C27 20 20 20 20 
+1267   0C2B 4C 61 72 73 
+1267   0C2F 6F 6E 20 53 
+1267   0C33 63 61 6E 6E 
+1267   0C37 65 72 00 
+1268   0C3A 20 20 20 20           .DB "    A       Binary Counting - Increment",0
+1268   0C3E 41 20 20 20 
+1268   0C42 20 20 20 20 
+1268   0C46 42 69 6E 61 
+1268   0C4A 72 79 20 43 
+1268   0C4E 6F 75 6E 74 
+1268   0C52 69 6E 67 20 
+1268   0C56 2D 20 49 6E 
+1268   0C5A 63 72 65 6D 
+1268   0C5E 65 6E 74 00 
+1269   0C62 20 20 20 20           .DB "    B       Binary Counting - Decrement",0 
+1269   0C66 42 20 20 20 
+1269   0C6A 20 20 20 20 
+1269   0C6E 42 69 6E 61 
+1269   0C72 72 79 20 43 
+1269   0C76 6F 75 6E 74 
+1269   0C7A 69 6E 67 20 
+1269   0C7E 2D 20 44 65 
+1269   0C82 63 72 65 6D 
+1269   0C86 65 6E 74 00 
+1270   0C8A 00                    .DB 0
+1271   0C8B 20 50 72 65           .DB " Press any other key to stop the demo.",0,
+1271   0C8F 73 73 20 61 
+1271   0C93 6E 79 20 6F 
+1271   0C97 74 68 65 72 
+1271   0C9B 20 6B 65 79 
+1271   0C9F 20 74 6F 20 
+1271   0CA3 73 74 6F 70 
+1271   0CA7 20 74 68 65 
+1271   0CAB 20 64 65 6D 
+1271   0CAF 6F 2E 00 
+1272   0CB2 24                    .DB "$"
+1273   0CB3             
+1274   0CB3             ; the sine list emulates y = 15*sin(I*24)+16, where I = 0 to 14 
+1275   0CB3 10 16 1B 1E sine      .DB 16,22,27,30,31,29,25,19,13,7,3,1,2,5,10 
+1275   0CB7 1F 1D 19 13 
+1275   0CBB 0D 07 03 01 
+1275   0CBF 02 05 0A 
+1276   0CC2             
+1277   0CC2             
+1278   0CC2             ;=============================================================
+1279   0CC2             ;
+1280   0CC2             ;   PROGRAM VARIABLES
+1281   0CC2             ;
+1282   0CC2             
+1283   0CC2 00          sign      .DB 0
+1284   0CC3 00          newValue  .DB 0
+1285   0CC4 00 00 00 00 values    .DB 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+1285   0CC8 00 00 00 00 
+1285   0CCC 00 00 00 00 
+1285   0CD0 00 00 00 00 
+1285   0CD4 00 00 
+1286   0CD6 00          tens      .DB 0
+1287   0CD7 00          ones      .DB 0
+1288   0CD8 00          seconds   .DB 0
+1289   0CD9 22          minutes   .DB 34
+1290   0CDA 0C          hours     .DB 12
+1291   0CDB 00          selection .DB 0
+1292   0CDC             
+1293   0CDC             .ENDtasm: Number of errors = 0
