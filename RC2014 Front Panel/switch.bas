@@ -13,7 +13,3 @@
 150 B=A
 160 PRINT "The switch value is ";A
 170 GOTO 110
-0 REM
-100 A=0:B=0
-110 A=INP(0)
-130 OUT 0
